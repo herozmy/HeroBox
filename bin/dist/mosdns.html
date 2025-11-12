@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>HeroBox Mosdns</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="layout">
+      <aside class="sidebar">
+        <div class="logo">HeroBox</div>
+        <nav>
+          <a class="nav-btn" href="./index.html">仪表盘</a>
+          <a class="nav-btn active" href="./mosdns.html">Mosdns</a>
+        </nav>
+      </aside>
+
+      <main id="app" class="content">
+        <div v-if="modal" class="modal-backdrop" @click.self="closeModal">
+          <div class="modal">
+            <h3>{{ modal.title }}</h3>
+            <p>{{ modal.message }}</p>
+            <div class="button-row modal__actions">
+              <button class="btn primary" @click="closeModal">我知道了</button>
+            </div>
+          </div>
+        </div>
+
+        <div v-if="logsModalOpen" class="modal-backdrop" @click.self="closeLogsModal">
+          <div class="modal modal--logs">
+            <div class="modal__header">
+              <h3>mosdns 运行日志</h3>
+              <button class="alert__close" @click="closeLogsModal">×</button>
+            </div>
+            <div class="log-list modal__logs" v-if="logsEntries.length">
+              <div class="log-item" v-for="item in logsEntries" :key="item.timestamp + item.message">
+                <time>{{ formatTime(item.timestamp) }}</time>
+                <span>{{ item.message }}</span>
+              </div>
+            </div>
+            <p class="muted" v-else>暂无 mosdns 日志。</p>
+            <div class="button-row modal__actions">
+              <button class="btn" @click="loadLogs" :disabled="logsLoading">
+                {{ logsLoading ? '刷新中…' : '刷新' }}
+              </button>
+              <button class="btn primary" @click="closeLogsModal">关闭</button>
+            </div>
+          </div>
+        </div>
+
+        <header class="content__header">
+          <div>
+            <div class="muted">基础信息</div>
+            <h1>Mosdns</h1>
+          </div>
+          <button class="btn soft" @click="traceAction">记录操作</button>
+        </header>
+
+        <div v-if="banner" class="alert" :class="`alert--${banner.type}`">
+          <span>{{ banner.text }}</span>
+          <button class="alert__close" @click="banner = null">×</button>
+        </div>
+
+        <section>
+          <div class="cards">
+            <article class="card">
+              <h2>运行状态</h2>
+              <div class="status" :class="statusClass">
+                <span class="status-dot"></span>
+                {{ statusLabel }}
+              </div>
+              <div class="muted">最近更新：{{ mosdns.lastUpdated }}</div>
+              <div class="muted" v-if="isMissing">未检测到 mosdns 核心，请先更新/安装内核。</div>
+              <div class="button-row">
+                <button class="btn primary" @click="toggleMosdns(true)" :disabled="!canStart || actionPending">
+                  {{ actionPending && pendingAction === 'start' ? '启动中…' : '启动' }}
+                </button>
+                <button class="btn" @click="toggleMosdns(false)" :disabled="!canStop || actionPending">
+                  {{ actionPending && pendingAction === 'stop' ? '停止中…' : '停止' }}
+                </button>
+              </div>
+            </article>
+
+            <article class="card">
+              <h2>mosdns 版本号</h2>
+              <div class="version-tag">{{ mosdns.version }}</div>
+              <div class="muted">最新稳定版：{{ mosdns.latestVersion }}</div>
+              <div class="button-row">
+                <button class="btn primary" @click="refreshVersion(false)" :disabled="mosdns.checking">
+                  {{ mosdns.checking ? '检测中...' : '检查更新' }}
+                </button>
+                <button class="btn" @click="applyLatest" :disabled="(!updateAvailable && !isMissing) || updatePending">
+                  {{ updatePending ? '更新中…' : '一键更新' }}
+                </button>
+              </div>
+            </article>
+
+            <article class="card">
+              <div class="card__header">
+                <h2>配置管理</h2>
+                <button class="btn" @click="openLogsModal">查看日志</button>
+              </div>
+              <p class="muted">当前配置：{{ config.path }}</p>
+              <div class="muted">最近同步：{{ config.lastSynced }}</div>
+              <div class="muted" v-if="!config.exists">
+                未检测到配置文件，请先下载模板并放置到上述路径后再启动 mosdns。
+              </div>
+              <div class="button-row">
+                <button class="btn" @click="previewConfig">预览</button>
+                <button class="btn" @click="syncConfig">同步</button>
+                <button
+                  class="btn primary"
+                  v-if="!config.exists"
+                  @click="downloadConfig"
+                >下载配置</button>
+                <button
+                  class="btn primary"
+                  v-else
+                  @click="editConfig"
+                >编辑</button>
+              </div>
+            </article>
+          </div>
+        </section>
+
+      </main>
+    </div>
+
+    <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+    <script src="./mosdns.js"></script>
+  </body>
+</html>

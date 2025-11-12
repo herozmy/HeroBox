@@ -1,0 +1,321 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log"
+	"net/http"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"strings"
+	"syscall"
+	"time"
+
+	"github.com/herozmy/herobox/internal/logs"
+	"github.com/herozmy/herobox/internal/mosdns"
+	"github.com/herozmy/herobox/internal/service"
+)
+
+func main() {
+	addr := getenv("HEROBOX_ADDR", ":8080")
+	configPath := getenv("MOSDNS_CONFIG_PATH", "/etc/herobox/mosdns/config.yaml")
+	logBuffer := logs.NewBuffer(500)
+	logs.SetBuffer(logBuffer)
+
+	svcManager := service.NewManager([]service.ServiceSpec{
+		{
+			Name:        "mosdns",
+			Unit:        getenv("MOSDNS_UNIT", "mosdns.service"),
+			BinaryPaths: binaryCandidates("MOSDNS_BIN", "/usr/local/bin/mosdns"),
+		},
+		{
+			Name:        "sing-box",
+			Unit:        getenv("SING_BOX_UNIT", "sing-box.service"),
+			BinaryPaths: binaryCandidates("SING_BOX_BIN", "/usr/local/bin/sing-box"),
+		},
+		{
+			Name:        "mihomo",
+			Unit:        getenv("MIHOMO_UNIT", "mihomo.service"),
+			BinaryPaths: binaryCandidates("MIHOMO_BIN", "/usr/local/bin/mihomo"),
+		},
+	})
+	updater := mosdns.DefaultUpdater()
+	if updater.InstallDir == "" {
+		updater.InstallDir = filepath.Join(".", "bin")
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/services", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			methodNotAllowed(w)
+			return
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+		defer cancel()
+		snaps, err := svcManager.List(ctx)
+		if err != nil {
+			respondErr(w, err)
+			return
+		}
+		respondJSON(w, snaps)
+	})
+	mux.Handle("/api/services/", http.StripPrefix("/api/services", serviceHandler(svcManager)))
+
+	mux.HandleFunc("/api/mosdns/kernel/latest", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			methodNotAllowed(w)
+			return
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+		defer cancel()
+		rel, err := updater.Client.LatestRelease(ctx)
+		if err != nil {
+			respondErr(w, err)
+			return
+		}
+		respondJSON(w, rel)
+	})
+
+	mux.HandleFunc("/api/mosdns/kernel/update", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			methodNotAllowed(w)
+			return
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Minute)
+		defer cancel()
+		rel, path, err := updater.UpdateLatest(ctx)
+		if err != nil {
+			respondErr(w, err)
+			return
+		}
+		respondJSON(w, map[string]any{
+			"release": rel,
+			"binary":  path,
+		})
+	})
+
+	mux.HandleFunc("/api/mosdns/config", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			methodNotAllowed(w)
+			return
+		}
+		info, err := os.Stat(configPath)
+		if err != nil {
+			if os.IsNotExist(err) {
+				respondJSON(w, map[string]any{
+					"path":   configPath,
+					"exists": false,
+				})
+				return
+			}
+			respondErr(w, err)
+			return
+		}
+		respondJSON(w, map[string]any{
+			"path":    configPath,
+			"exists":  true,
+			"size":    info.Size(),
+			"modTime": info.ModTime(),
+		})
+	})
+
+	mux.HandleFunc("/api/mosdns/logs", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			methodNotAllowed(w)
+			return
+		}
+		respondJSON(w, map[string]any{
+			"entries": logs.BufferEntries(),
+		})
+	})
+
+	staticDir := resolveStaticDir()
+	log.Printf("静态资源目录: %s", staticDir)
+	mux.Handle("/", http.FileServer(http.Dir(staticDir)))
+
+	srv := &http.Server{
+		Addr:    addr,
+		Handler: cors(mux),
+	}
+
+	go func() {
+		log.Printf("herobox 后端启动，监听 %s", addr)
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Fatalf("server error: %v", err)
+		}
+	}()
+
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
+	<-stop
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := srv.Shutdown(ctx); err != nil {
+		log.Printf("graceful shutdown failed: %v", err)
+	}
+}
+
+func serviceHandler(mgr *service.Manager) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path := strings.Trim(r.URL.Path, "/")
+		if path == "" {
+			http.NotFound(w, r)
+			return
+		}
+		parts := strings.Split(path, "/")
+		name := parts[0]
+		switch r.Method {
+		case http.MethodGet:
+			ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+			defer cancel()
+			snap, err := mgr.Status(ctx, name)
+			if err != nil {
+				respondErr(w, err)
+				return
+			}
+			respondJSON(w, snap)
+		case http.MethodPost:
+			if len(parts) < 2 {
+				respondErr(w, errors.New("缺少操作动作，如 start/stop"))
+				return
+			}
+			action := parts[1]
+			ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+			defer cancel()
+			var err error
+			switch action {
+			case "start":
+				err = mgr.Start(ctx, name)
+			case "stop":
+				err = mgr.Stop(ctx, name)
+			case "restart":
+				err = mgr.Restart(ctx, name)
+			default:
+				respondErr(w, fmt.Errorf("不支持的操作 %s", action))
+				return
+			}
+			if err != nil {
+				respondErr(w, err)
+				return
+			}
+			snap, err := mgr.Status(ctx, name)
+			if err != nil {
+				respondErr(w, err)
+				return
+			}
+			respondJSON(w, snap)
+		default:
+			methodNotAllowed(w)
+		}
+	})
+}
+
+func cors(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET,POST,OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type,Authorization")
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func respondJSON(w http.ResponseWriter, payload any) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	if err := json.NewEncoder(w).Encode(payload); err != nil {
+		log.Printf("write json failed: %v", err)
+	}
+}
+
+func respondErr(w http.ResponseWriter, err error) {
+	log.Printf("api error: %v", err)
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(http.StatusBadRequest)
+	_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+}
+
+func methodNotAllowed(w http.ResponseWriter) {
+	w.WriteHeader(http.StatusMethodNotAllowed)
+}
+
+func getenv(key, fallback string) string {
+	if val := os.Getenv(key); val != "" {
+		return val
+	}
+	return fallback
+}
+
+func resolveBinDir() string {
+	if env := os.Getenv("HEROBOX_BIN_DIR"); env != "" {
+		if info, err := os.Stat(env); err == nil && info.IsDir() {
+			return env
+		}
+	}
+	if exe, err := os.Executable(); err == nil {
+		dir := filepath.Dir(exe)
+		if info, err := os.Stat(dir); err == nil && info.IsDir() {
+			return dir
+		}
+	}
+	return filepath.Join(".", "bin")
+}
+
+func binaryCandidates(envKey string, fallbacks ...string) []string {
+	var candidates []string
+	if val := os.Getenv(envKey); val != "" {
+		candidates = append(candidates, val)
+	}
+	candidates = append(candidates, fallbacks...)
+	uniq := make([]string, 0, len(candidates))
+	seen := make(map[string]struct{})
+	for _, c := range candidates {
+		if c == "" {
+			continue
+		}
+		if _, ok := seen[c]; ok {
+			continue
+		}
+		seen[c] = struct{}{}
+		uniq = append(uniq, c)
+	}
+	return uniq
+}
+
+func resolveStaticDir() string {
+	var candidates []string
+	if env := os.Getenv("HEROBOX_STATIC_DIR"); env != "" {
+		candidates = append(candidates, env)
+	}
+
+	if exe, err := os.Executable(); err == nil {
+		dir := filepath.Dir(exe)
+		candidates = append(candidates, filepath.Join(dir, "dist"))
+	}
+
+	candidates = append(candidates,
+		filepath.Join(".", "bin", "dist"),
+		filepath.Join(".", "frontend"),
+	)
+
+	seen := make(map[string]struct{})
+	for _, c := range candidates {
+		if c == "" {
+			continue
+		}
+		if _, ok := seen[c]; ok {
+			continue
+		}
+		seen[c] = struct{}{}
+		if info, err := os.Stat(c); err == nil && info.IsDir() {
+			return c
+		}
+	}
+	return "."
+}
