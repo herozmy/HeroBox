@@ -23,7 +23,13 @@ import (
 
 func main() {
 	addr := getenv("HEROBOX_ADDR", ":8080")
-	configStore := config.NewStore(getenv("MOSDNS_CONFIG_PATH", "/etc/herobox/mosdns/config.yaml"))
+	configStore, err := config.NewStore(
+		getenv("MOSDNS_CONFIG_PATH", "/etc/herobox/mosdns/config.yaml"),
+		getenv("HEROBOX_CONFIG_FILE", "/etc/herobox/herobox.json"),
+	)
+	if err != nil {
+		log.Fatalf("加载配置文件失败: %v", err)
+	}
 	logBuffer := logs.NewBuffer(500)
 	logs.SetBuffer(logBuffer)
 
@@ -116,12 +122,11 @@ func main() {
 				return
 			}
 			path := strings.TrimSpace(payload.Path)
-			if path == "" {
-				respondErr(w, errors.New("配置路径不能为空"))
+			if err := configStore.SetConfigPath(path); err != nil {
+				respondErr(w, err)
 				return
 			}
-			configStore.SetConfigPath(path)
-			respondJSON(w, buildConfigStatus(path))
+			respondJSON(w, buildConfigStatus(configStore.GetConfigPath()))
 		default:
 			methodNotAllowed(w)
 		}

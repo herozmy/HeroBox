@@ -42,6 +42,11 @@ MYBOX_ADDR=:8080 ./mybox
 2. **极简界面**：前端保持极简风格，优先确保功能可用性与状态透明。
 3. **日志透明**：所有服务控制、版本检测、内核下载过程必须写日志，便于前端与后端排障。
 
+## 配置持久化
+
+- `HEROBOX_CONFIG_FILE`（默认 `/etc/herobox/herobox.json`）用于保存前端可调整的设置，目前包含 mosdns 配置路径。
+- 当在前端“配置管理”中修改路径时，后端会同步写入该文件；重启程序后依然使用最新路径，同时 mosdns 的启动命令会根据新路径自动调整 `-c` 与 `-d` 参数。
+
 ## API 摘要
 
 - `GET /api/services`、`GET|POST /api/services/{name}`：查询/控制服务状态（`start|stop|restart`）。
