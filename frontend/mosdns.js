@@ -27,6 +27,9 @@ document.addEventListener('DOMContentLoaded', () => {
         modal: null,
         logsLoading: false,
         logsModalOpen: false,
+        configEditModalOpen: false,
+        configEditValue: '',
+        configSaving: false,
       };
       },
       computed: {
@@ -82,21 +85,21 @@ document.addEventListener('DOMContentLoaded', () => {
           this.logsLoading = false;
         }
       },
-        async loadConfigStatus() {
-          try {
-            const status = await this.apiRequest('/api/mosdns/config');
-            if (status.path) {
-              this.config.path = status.path;
-            }
-            this.config.exists = Boolean(status.exists);
-            if (status.modTime) {
-              this.config.lastSynced = this.formatTime(status.modTime);
-            }
-            if (!this.config.exists) {
-              this.setBanner('error', '未检测到 mosdns 配置，请先下载配置文件。');
-              this.openModal('缺少配置文件', '尚未找到 mosdns 配置，请下载官方模板并放置到指定路径后重试。');
-            }
-          } catch (err) {
+      async loadConfigStatus() {
+        try {
+          const status = await this.apiRequest('/api/mosdns/config');
+          if (status.path) {
+            this.config.path = status.path;
+          }
+          this.config.exists = Boolean(status.exists);
+          if (status.modTime) {
+            this.config.lastSynced = this.formatTime(status.modTime);
+          }
+          if (!this.config.exists) {
+            this.setBanner('error', '未检测到 mosdns 配置，请先下载配置文件。');
+            this.openModal('缺少配置文件', '尚未找到 mosdns 配置，请下载官方模板并放置到指定路径后重试。');
+          }
+        } catch (err) {
             this.setBanner('error', `检测配置失败：${err.message}`);
           }
         },
@@ -244,6 +247,34 @@ document.addEventListener('DOMContentLoaded', () => {
       },
       downloadConfig() {
         this.openModal('下载配置', '配置模板即将提供，请稍后在文档中下载最新配置文件。');
+      },
+      openConfigEditor() {
+        this.configEditValue = this.config.path || '';
+        this.configEditModalOpen = true;
+      },
+      closeConfigEditor() {
+        this.configEditModalOpen = false;
+      },
+      async saveConfigPath() {
+        const value = (this.configEditValue || '').trim();
+        if (!value) {
+          this.setBanner('error', '配置路径不能为空');
+          return;
+        }
+        this.configSaving = true;
+        try {
+          await this.apiRequest('/api/mosdns/config', {
+            method: 'PUT',
+            body: JSON.stringify({ path: value }),
+          });
+          this.setBanner('success', '配置路径已更新');
+          this.closeConfigEditor();
+          await this.loadConfigStatus();
+        } catch (err) {
+          this.setBanner('error', `更新配置路径失败：${err.message}`);
+        } finally {
+          this.configSaving = false;
+        }
       },
       openLogsModal() {
         this.logsModalOpen = true;

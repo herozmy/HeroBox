@@ -49,6 +49,28 @@
           </div>
         </div>
 
+        <div v-if="configEditModalOpen" class="modal-backdrop" @click.self="closeConfigEditor">
+          <div class="modal">
+            <div class="modal__header">
+              <h3>修改配置路径</h3>
+              <button class="alert__close" @click="closeConfigEditor">×</button>
+            </div>
+            <input
+              class="modal__input"
+              type="text"
+              v-model="configEditValue"
+              placeholder="例如 /etc/herobox/mosdns/config.yaml"
+            />
+            <p class="muted">更新后将以新路径检测配置文件，并据此允许启动 mosdns。</p>
+            <div class="button-row modal__actions">
+              <button class="btn" @click="closeConfigEditor">取消</button>
+              <button class="btn primary" @click="saveConfigPath" :disabled="configSaving">
+                {{ configSaving ? '保存中…' : '保存' }}
+              </button>
+            </div>
+          </div>
+        </div>
+
         <header class="content__header">
           <div>
             <div class="muted">基础信息</div>
@@ -99,7 +121,10 @@
             <article class="card">
               <div class="card__header">
                 <h2>配置管理</h2>
-                <button class="btn" @click="openLogsModal">查看日志</button>
+                <div class="card__actions">
+                  <button class="btn" @click="openLogsModal">查看日志</button>
+                  <button class="btn" @click="openConfigEditor">修改路径</button>
+                </div>
               </div>
               <p class="muted">当前配置：{{ config.path }}</p>
               <div class="muted">最近同步：{{ config.lastSynced }}</div>

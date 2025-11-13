@@ -117,6 +117,11 @@ body {
   margin-bottom: 16px;
 }
 
+.card__actions {
+  display: flex;
+  gap: 10px;
+}
+
 .status-dot {
   width: 10px;
   height: 10px;
@@ -333,6 +338,20 @@ body {
 
 .modal__logs {
   max-height: 360px;
+}
+
+.modal__input {
+  width: 100%;
+  padding: 10px 14px;
+  border-radius: 10px;
+  border: 1px solid rgba(15, 23, 42, 0.15);
+  font-size: 14px;
+  outline: none;
+}
+
+.modal__input:focus {
+  border-color: var(--brand);
+  box-shadow: 0 0 0 2px rgba(31, 122, 236, 0.15);
 }
 
 @media (max-width: 520px) {

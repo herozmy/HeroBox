@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/herozmy/herobox/internal/config"
 	"github.com/herozmy/herobox/internal/logs"
 	"github.com/herozmy/herobox/internal/mosdns"
 	"github.com/herozmy/herobox/internal/service"
@@ -21,7 +22,7 @@ import (
 
 func main() {
 	addr := getenv("HEROBOX_ADDR", ":8080")
-	configPath := getenv("MOSDNS_CONFIG_PATH", "/etc/herobox/mosdns/config.yaml")
+	configStore := config.NewStore(getenv("MOSDNS_CONFIG_PATH", "/etc/herobox/mosdns/config.yaml"))
 	logBuffer := logs.NewBuffer(500)
 	logs.SetBuffer(logBuffer)
 
@@ -98,28 +99,28 @@ func main() {
 	})
 
 	mux.HandleFunc("/api/mosdns/config", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			methodNotAllowed(w)
-			return
-		}
-		info, err := os.Stat(configPath)
-		if err != nil {
-			if os.IsNotExist(err) {
-				respondJSON(w, map[string]any{
-					"path":   configPath,
-					"exists": false,
-				})
+		switch r.Method {
+		case http.MethodGet:
+			status := buildConfigStatus(configStore.GetConfigPath())
+			respondJSON(w, status)
+		case http.MethodPut:
+			var payload struct {
+				Path string `json:"path"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				respondErr(w, fmt.Errorf("无效的请求体: %w", err))
 				return
 			}
-			respondErr(w, err)
-			return
+			path := strings.TrimSpace(payload.Path)
+			if path == "" {
+				respondErr(w, errors.New("配置路径不能为空"))
+				return
+			}
+			configStore.SetConfigPath(path)
+			respondJSON(w, buildConfigStatus(path))
+		default:
+			methodNotAllowed(w)
 		}
-		respondJSON(w, map[string]any{
-			"path":    configPath,
-			"exists":  true,
-			"size":    info.Size(),
-			"modTime": info.ModTime(),
-		})
 	})
 
 	mux.HandleFunc("/api/mosdns/logs", func(w http.ResponseWriter, r *http.Request) {
@@ -318,4 +319,27 @@ func resolveStaticDir() string {
 		}
 	}
 	return "."
+}
+
+func buildConfigStatus(path string) map[string]any {
+	info, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return map[string]any{
+				"path":   path,
+				"exists": false,
+			}
+		}
+		return map[string]any{
+			"path":   path,
+			"exists": false,
+			"error":  err.Error(),
+		}
+	}
+	return map[string]any{
+		"path":    path,
+		"exists":  true,
+		"size":    info.Size(),
+		"modTime": info.ModTime(),
+	}
 }
