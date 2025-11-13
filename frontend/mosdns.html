@@ -95,8 +95,12 @@
               <div class="muted">最近更新：{{ mosdns.lastUpdated }}</div>
               <div class="muted" v-if="isMissing">未检测到 mosdns 核心，请先更新/安装内核。</div>
               <div class="button-row">
-                <button class="btn primary" @click="toggleMosdns(true)" :disabled="!canStart || actionPending">
-                  {{ actionPending && pendingAction === 'start' ? '启动中…' : '启动' }}
+                <button
+                  class="btn primary"
+                  @click="handleStartOrRestart"
+                  :disabled="startButtonDisabled"
+                >
+                  {{ startButtonLabel }}
                 </button>
                 <button class="btn" @click="toggleMosdns(false)" :disabled="!canStop || actionPending">
                   {{ actionPending && pendingAction === 'stop' ? '停止中…' : '停止' }}

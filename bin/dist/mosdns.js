@@ -51,6 +51,17 @@ document.addEventListener('DOMContentLoaded', () => {
       canStart() {
         return !this.isMissing && !this.isRunning && this.config.exists;
       },
+      startButtonLabel() {
+        if (this.actionPending && this.pendingAction === 'start') return '启动中…';
+        if (this.actionPending && this.pendingAction === 'restart') return '重启中…';
+        if (this.isRunning) return '重启';
+        return '启动';
+      },
+      startButtonDisabled() {
+        if (this.actionPending) return true;
+        if (this.isRunning) return false;
+        return !this.canStart;
+      },
       canStop() {
         return this.isRunning;
       },
@@ -198,6 +209,35 @@ document.addEventListener('DOMContentLoaded', () => {
           this.consumeSnapshot(snap);
           this.setBanner('success', `mosdns 已${state ? '启动' : '停止'}`);
           this.loadLogs();
+        } catch (err) {
+          this.setBanner('error', err.message);
+        } finally {
+          this.actionPending = false;
+          this.pendingAction = '';
+        }
+      },
+      async handleStartOrRestart() {
+        if (this.isRunning) {
+          await this.performAction('restart');
+        } else {
+          await this.performAction('start');
+        }
+      },
+      async performAction(action) {
+        if (action === 'start' && !this.canStart) {
+          return;
+        }
+        if (action === 'restart' && !this.isRunning) {
+          return;
+        }
+        this.actionPending = true;
+        this.pendingAction = action;
+        try {
+          const endpoint = action === 'restart' ? '/api/services/mosdns/restart' : '/api/services/mosdns/start';
+          const snap = await this.apiRequest(endpoint, { method: 'POST' });
+          this.consumeSnapshot(snap);
+          this.setBanner('success', `mosdns 已${action === 'restart' ? '重启' : '启动'}`);
+          await this.loadLogs();
         } catch (err) {
           this.setBanner('error', err.message);
         } finally {
