@@ -401,6 +401,7 @@ func updateMosdnsState(store *config.Store, snaps ...service.Snapshot) {
 	}
 }
 
+
 func newMosdnsHooks(store *config.Store) service.ServiceHooks {
 	defaultDataDir := getenv("MOSDNS_DATA_DIR", "")
 	return service.ServiceHooks{
@@ -411,7 +412,7 @@ func newMosdnsHooks(store *config.Store) service.ServiceHooks {
 			}
 			cfg := store.GetConfigPath()
 			dataDir := resolveMosdnsDataDir(defaultDataDir, cfg)
-			return runCommand(ctx, binary, "start", "-c", cfg, "-d", dataDir)
+			return runCommandDetached(binary, "start", "-c", cfg, "-d", dataDir)
 		},
 		Stop: func(ctx context.Context, spec service.ServiceSpec) error {
 			binary, err := firstExistingBinary(spec.BinaryPaths)
@@ -427,7 +428,7 @@ func newMosdnsHooks(store *config.Store) service.ServiceHooks {
 			}
 			cfg := store.GetConfigPath()
 			dataDir := resolveMosdnsDataDir(defaultDataDir, cfg)
-			return runCommand(ctx, binary, "restart", "-c", cfg, "-d", dataDir)
+			return runCommandDetached(binary, "restart", "-c", cfg, "-d", dataDir)
 		},
 	}
 }
@@ -463,4 +464,14 @@ func runCommand(ctx context.Context, binary string, args ...string) error {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
+}
+
+func runCommandDetached(binary string, args ...string) error {
+	cmd := exec.Command(binary, args...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	return cmd.Process.Release()
 }
