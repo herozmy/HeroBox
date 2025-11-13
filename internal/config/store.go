@@ -16,6 +16,7 @@ type Store struct {
 	configPath  string
 	heroboxPort string
 	mosdnsState string
+	mosdnsPID   int
 	uiSettings  map[string]string
 	filePath    string
 }
@@ -26,6 +27,7 @@ type fileState struct {
 	Mosdns      struct {
 		ConfigPath string `yaml:"configPath"`
 		Status     string `yaml:"status"`
+		PID        int    `yaml:"pid"`
 	} `yaml:"mosdns"`
 }
 
@@ -70,6 +72,19 @@ func (s *Store) SetMosdnsStatus(status string) error {
 	s.mosdnsState = status
 	s.mu.Unlock()
 	return s.persist()
+}
+
+func (s *Store) SetMosdnsPID(pid int) error {
+	s.mu.Lock()
+	s.mosdnsPID = pid
+	s.mu.Unlock()
+	return s.persist()
+}
+
+func (s *Store) MosdnsPID() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.mosdnsPID
 }
 
 func (s *Store) SetHeroboxPort(port string) error {
@@ -130,6 +145,7 @@ func (s *Store) load() error {
 		s.configPath = state.Mosdns.ConfigPath
 	}
 	s.mosdnsState = state.Mosdns.Status
+	s.mosdnsPID = state.Mosdns.PID
 	if len(state.UISettings) > 0 {
 		if s.uiSettings == nil {
 			s.uiSettings = make(map[string]string)
@@ -162,6 +178,7 @@ func (s *Store) persist() error {
 	}
 	state.Mosdns.ConfigPath = s.configPath
 	state.Mosdns.Status = s.mosdnsState
+	state.Mosdns.PID = s.mosdnsPID
 	s.mu.RUnlock()
 
 	data, err := yaml.Marshal(&state)

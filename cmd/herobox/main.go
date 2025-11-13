@@ -401,7 +401,6 @@ func updateMosdnsState(store *config.Store, snaps ...service.Snapshot) {
 	}
 }
 
-
 func newMosdnsHooks(store *config.Store) service.ServiceHooks {
 	defaultDataDir := getenv("MOSDNS_DATA_DIR", "")
 	return service.ServiceHooks{
@@ -412,23 +411,37 @@ func newMosdnsHooks(store *config.Store) service.ServiceHooks {
 			}
 			cfg := store.GetConfigPath()
 			dataDir := resolveMosdnsDataDir(defaultDataDir, cfg)
-			return runCommandDetached(binary, "start", "-c", cfg, "-d", dataDir)
-		},
-		Stop: func(ctx context.Context, spec service.ServiceSpec) error {
-			binary, err := firstExistingBinary(spec.BinaryPaths)
+			pid, err := runCommandDetached(binary, "start", "-c", cfg, "-d", dataDir)
 			if err != nil {
 				return err
 			}
-			return runCommand(ctx, binary, "stop")
+			return store.SetMosdnsPID(pid)
+		},
+		Stop: func(ctx context.Context, spec service.ServiceSpec) error {
+			pid := store.MosdnsPID()
+			if pid <= 0 {
+				return errors.New("未找到 mosdns 进程 PID")
+			}
+			if err := terminateProcess(pid); err != nil {
+				return err
+			}
+			return store.SetMosdnsPID(0)
 		},
 		Restart: func(ctx context.Context, spec service.ServiceSpec) error {
+			if pid := store.MosdnsPID(); pid > 0 {
+				_ = terminateProcess(pid)
+			}
 			binary, err := firstExistingBinary(spec.BinaryPaths)
 			if err != nil {
 				return err
 			}
 			cfg := store.GetConfigPath()
 			dataDir := resolveMosdnsDataDir(defaultDataDir, cfg)
-			return runCommandDetached(binary, "restart", "-c", cfg, "-d", dataDir)
+			pid, err := runCommandDetached(binary, "start", "-c", cfg, "-d", dataDir)
+			if err != nil {
+				return err
+			}
+			return store.SetMosdnsPID(pid)
 		},
 	}
 }
@@ -466,12 +479,27 @@ func runCommand(ctx context.Context, binary string, args ...string) error {
 	return cmd.Run()
 }
 
-func runCommandDetached(binary string, args ...string) error {
+func runCommandDetached(binary string, args ...string) (int, error) {
 	cmd := exec.Command(binary, args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Start(); err != nil {
+		return 0, err
+	}
+	pid := cmd.Process.Pid
+	if err := cmd.Process.Release(); err != nil {
+		return pid, err
+	}
+	return pid, nil
+}
+
+func terminateProcess(pid int) error {
+	if pid <= 0 {
+		return errors.New("无效的 PID")
+	}
+	proc, err := os.FindProcess(pid)
+	if err != nil {
 		return err
 	}
-	return cmd.Process.Release()
+	return proc.Signal(syscall.SIGTERM)
 }
