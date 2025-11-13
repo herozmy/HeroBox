@@ -44,8 +44,12 @@ MYBOX_ADDR=:8080 ./mybox
 
 ## 配置持久化
 
-- `HEROBOX_CONFIG_FILE`（默认生成在程序运行目录的 `herobox.json`）用于保存前端可调整的设置，目前包含 mosdns 配置路径及 UI 设置；可通过环境变量自定义存储位置。
-- 当在前端“配置管理”中修改路径时，后端会同步写入该文件；重启程序后依然使用最新路径，同时 mosdns 的启动命令会根据新路径自动调整 `-c` 与 `-d` 参数。
+- `HEROBOX_CONFIG_FILE`（默认生成在程序运行目录的 `herobox.yaml`）保存所有可变设置，格式采用 YAML，包含：
+  - `heroboxPort`: 程序当前监听端口（示例 `":8080"`）。
+  - `mosdns.configPath`: 前端配置的 mosdns 配置文件路径。
+  - `mosdns.status`: 最近一次查询到的 mosdns 状态（`running`/`stopped`/`missing`）。
+  - `uiSettings`: 前端的个性化设置（如 `autoRefreshLogs`）。
+- 每次在前端修改 mosdns 配置路径、切换自动刷新日志等设置后，后端都会立即写入该 YAML 文件；重启程序会自动加载这些默认值，并根据最新路径调整 mosdns 启动命令的 `-c/-d` 参数。
 
 ## API 摘要
 

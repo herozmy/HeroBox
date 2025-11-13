@@ -30,6 +30,9 @@ func main() {
 	if err != nil {
 		log.Fatalf("加载配置文件失败: %v", err)
 	}
+	if err := configStore.SetHeroboxPort(addr); err != nil {
+		log.Printf("记录端口失败: %v", err)
+	}
 	logBuffer := logs.NewBuffer(500)
 	logs.SetBuffer(logBuffer)
 
@@ -71,9 +74,10 @@ func main() {
 			respondErr(w, err)
 			return
 		}
+		updateMosdnsState(configStore, snaps...)
 		respondJSON(w, snaps)
 	})
-	mux.Handle("/api/services/", http.StripPrefix("/api/services", serviceHandler(svcManager)))
+	mux.Handle("/api/services/", http.StripPrefix("/api/services", serviceHandler(svcManager, configStore)))
 
 	mux.HandleFunc("/api/mosdns/kernel/latest", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
@@ -189,7 +193,7 @@ func main() {
 	}
 }
 
-func serviceHandler(mgr *service.Manager) http.Handler {
+func serviceHandler(mgr *service.Manager, store *config.Store) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		path := strings.Trim(r.URL.Path, "/")
 		if path == "" {
@@ -207,6 +211,7 @@ func serviceHandler(mgr *service.Manager) http.Handler {
 				respondErr(w, err)
 				return
 			}
+			updateMosdnsState(store, snap)
 			respondJSON(w, snap)
 		case http.MethodPost:
 			if len(parts) < 2 {
@@ -237,6 +242,7 @@ func serviceHandler(mgr *service.Manager) http.Handler {
 				respondErr(w, err)
 				return
 			}
+			updateMosdnsState(store, snap)
 			respondJSON(w, snap)
 		default:
 			methodNotAllowed(w)
@@ -378,9 +384,21 @@ func defaultConfigFile() string {
 		return env
 	}
 	if wd, err := os.Getwd(); err == nil {
-		return filepath.Join(wd, "herobox.json")
+		return filepath.Join(wd, "herobox.yaml")
 	}
-	return "herobox.json"
+	return "herobox.yaml"
+}
+
+func updateMosdnsState(store *config.Store, snaps ...service.Snapshot) {
+	if store == nil {
+		return
+	}
+	for _, snap := range snaps {
+		if !strings.EqualFold(snap.Name, "mosdns") {
+			continue
+		}
+		_ = store.SetMosdnsStatus(string(snap.Status))
+	}
 }
 
 func newMosdnsHooks(store *config.Store) service.ServiceHooks {
