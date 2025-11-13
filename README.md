@@ -44,7 +44,7 @@ MYBOX_ADDR=:8080 ./mybox
 
 ## 配置持久化
 
-- `HEROBOX_CONFIG_FILE`（默认 `/etc/herobox/herobox.json`）用于保存前端可调整的设置，目前包含 mosdns 配置路径。
+- `HEROBOX_CONFIG_FILE`（默认生成在程序运行目录的 `herobox.json`）用于保存前端可调整的设置，目前包含 mosdns 配置路径及 UI 设置；可通过环境变量自定义存储位置。
 - 当在前端“配置管理”中修改路径时，后端会同步写入该文件；重启程序后依然使用最新路径，同时 mosdns 的启动命令会根据新路径自动调整 `-c` 与 `-d` 参数。
 
 ## API 摘要

@@ -25,7 +25,7 @@ func main() {
 	addr := getenv("HEROBOX_ADDR", ":8080")
 	configStore, err := config.NewStore(
 		getenv("MOSDNS_CONFIG_PATH", "/etc/herobox/mosdns/config.yaml"),
-		getenv("HEROBOX_CONFIG_FILE", "/etc/herobox/herobox.json"),
+		getenv("HEROBOX_CONFIG_FILE", defaultConfigFile()),
 	)
 	if err != nil {
 		log.Fatalf("加载配置文件失败: %v", err)
@@ -371,6 +371,16 @@ func buildConfigStatus(path string) map[string]any {
 		"size":    info.Size(),
 		"modTime": info.ModTime(),
 	}
+}
+
+func defaultConfigFile() string {
+	if env := os.Getenv("HEROBOX_CONFIG_FILE"); env != "" {
+		return env
+	}
+	if wd, err := os.Getwd(); err == nil {
+		return filepath.Join(wd, "herobox.json")
+	}
+	return "herobox.json"
 }
 
 func newMosdnsHooks(store *config.Store) service.ServiceHooks {
