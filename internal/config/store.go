@@ -14,18 +14,23 @@ type Store struct {
 	mu         sync.RWMutex
 	configPath string
 	filePath   string
+	settings   map[string]string
 }
 
 type fileState struct {
-	MosdnsConfigPath string `json:"mosdnsConfigPath"`
+	MosdnsConfigPath string            `json:"mosdnsConfigPath"`
+	UISettings       map[string]string `json:"uiSettings,omitempty"`
 }
 
 func NewStore(defaultPath, filePath string) (*Store, error) {
 	if defaultPath == "" {
 		defaultPath = "/etc/herobox/mosdns/config.yaml"
 	}
-	store := &Store{configPath: defaultPath, filePath: filePath}
+	store := &Store{configPath: defaultPath, filePath: filePath, settings: map[string]string{}}
 	if err := store.load(); err != nil {
+		return nil, err
+	}
+	if err := store.persist(); err != nil {
 		return nil, err
 	}
 	return store, nil
@@ -48,6 +53,35 @@ func (s *Store) SetConfigPath(path string) error {
 	return s.persist()
 }
 
+func (s *Store) Settings() map[string]string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	copyMap := make(map[string]string, len(s.settings))
+	for k, v := range s.settings {
+		copyMap[k] = v
+	}
+	return copyMap
+}
+
+func (s *Store) UpdateSettings(values map[string]string) error {
+	if len(values) == 0 {
+		return nil
+	}
+	s.mu.Lock()
+	if s.settings == nil {
+		s.settings = make(map[string]string)
+	}
+	for k, v := range values {
+		key := strings.TrimSpace(k)
+		if key == "" {
+			continue
+		}
+		s.settings[key] = v
+	}
+	s.mu.Unlock()
+	return s.persist()
+}
+
 func (s *Store) load() error {
 	if s.filePath == "" {
 		return nil
@@ -66,6 +100,12 @@ func (s *Store) load() error {
 	if state.MosdnsConfigPath != "" {
 		s.configPath = state.MosdnsConfigPath
 	}
+	if len(state.UISettings) > 0 {
+		s.settings = make(map[string]string, len(state.UISettings))
+		for k, v := range state.UISettings {
+			s.settings[k] = v
+		}
+	}
 	return nil
 }
 
@@ -78,7 +118,13 @@ func (s *Store) persist() error {
 		return err
 	}
 	s.mu.RLock()
-	state := fileState{MosdnsConfigPath: s.configPath}
+	state := fileState{
+		MosdnsConfigPath: s.configPath,
+		UISettings:       make(map[string]string, len(s.settings)),
+	}
+	for k, v := range s.settings {
+		state.UISettings[k] = v
+	}
 	s.mu.RUnlock()
 	data, err := json.MarshalIndent(state, "", "  ")
 	if err != nil {

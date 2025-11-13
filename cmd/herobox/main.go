@@ -142,6 +142,26 @@ func main() {
 		})
 	})
 
+	mux.HandleFunc("/api/settings", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			respondJSON(w, map[string]any{"settings": configStore.Settings()})
+		case http.MethodPut:
+			var payload map[string]string
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				respondErr(w, fmt.Errorf("无效的请求体: %w", err))
+				return
+			}
+			if err := configStore.UpdateSettings(payload); err != nil {
+				respondErr(w, err)
+				return
+			}
+			respondJSON(w, map[string]any{"settings": configStore.Settings()})
+		default:
+			methodNotAllowed(w)
+		}
+	})
+
 	staticDir := resolveStaticDir()
 	log.Printf("静态资源目录: %s", staticDir)
 	mux.Handle("/", http.FileServer(http.Dir(staticDir)))

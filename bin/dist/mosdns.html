@@ -131,6 +131,13 @@
               <div class="muted" v-if="!config.exists">
                 未检测到配置文件，请先下载模板并放置到上述路径后再启动 mosdns。
               </div>
+              <div class="setting-row">
+                <label class="switch">
+                  <input type="checkbox" v-model="uiSettings.autoRefreshLogs" @change="handleAutoRefreshToggle" />
+                  自动刷新日志
+                </label>
+                <span class="muted">{{ uiSettings.autoRefreshLogs ? '日志将在后台自动刷新' : '关闭自动刷新以减少请求' }}</span>
+              </div>
               <div class="button-row">
                 <button class="btn" @click="previewConfig">预览</button>
                 <button class="btn" @click="syncConfig">同步</button>

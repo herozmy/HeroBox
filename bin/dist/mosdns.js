@@ -17,8 +17,10 @@ document.addEventListener('DOMContentLoaded', () => {
           lastSynced: '-',
           exists: true,
         },
-        logs: [],
         logsEntries: [],
+        uiSettings: {
+          autoRefreshLogs: true,
+        },
         banner: null,
         actionPending: false,
         pendingAction: '',
@@ -30,9 +32,12 @@ document.addEventListener('DOMContentLoaded', () => {
         configEditModalOpen: false,
         configEditValue: '',
         configSaving: false,
+        settingsLoading: false,
+        settingsSaving: false,
+        autoRefreshTimer: null,
       };
-      },
-      computed: {
+    },
+    computed: {
       updateAvailable() {
         if (!this.mosdns.version || !this.mosdns.latestVersion) return false;
         return this.mosdns.version !== this.mosdns.latestVersion;
@@ -59,8 +64,8 @@ document.addEventListener('DOMContentLoaded', () => {
         if (this.isMissing) return '未安装';
         return '已停止';
       },
-      },
-      methods: {
+    },
+    methods: {
       async loadServiceStatus() {
         this.stateLoading = true;
         try {
@@ -78,12 +83,20 @@ document.addEventListener('DOMContentLoaded', () => {
           const payload = await this.apiRequest('/api/mosdns/logs');
           const entries = Array.isArray(payload.entries) ? payload.entries : [];
           this.logsEntries = entries.filter((item) =>
-            typeof item.message === 'string' && item.message.includes('[mosdns]'));
+            typeof item.message === 'string' && item.message.includes('[mosdns]'),
+          );
         } catch (err) {
           this.setBanner('error', `获取日志失败：${err.message}`);
         } finally {
           this.logsLoading = false;
         }
+      },
+      openLogsModal() {
+        this.logsModalOpen = true;
+        this.loadLogs();
+      },
+      closeLogsModal() {
+        this.logsModalOpen = false;
       },
       async loadConfigStatus() {
         try {
@@ -100,9 +113,66 @@ document.addEventListener('DOMContentLoaded', () => {
             this.openModal('缺少配置文件', '尚未找到 mosdns 配置，请下载官方模板并放置到指定路径后重试。');
           }
         } catch (err) {
-            this.setBanner('error', `检测配置失败：${err.message}`);
+          this.setBanner('error', `检测配置失败：${err.message}`);
+        }
+      },
+      async loadSettings() {
+        this.settingsLoading = true;
+        try {
+          const resp = await this.apiRequest('/api/settings');
+          if (resp.settings) {
+            this.applySettingsFromServer(resp.settings);
           }
-        },
+          this.applySettings();
+        } catch (err) {
+          this.setBanner('error', `加载前端设置失败：${err.message}`);
+        } finally {
+          this.settingsLoading = false;
+        }
+      },
+      applySettingsFromServer(serverSettings) {
+        const normalized = { ...this.uiSettings };
+        if (Object.prototype.hasOwnProperty.call(serverSettings, 'autoRefreshLogs')) {
+          normalized.autoRefreshLogs = this.normalizeBool(
+            serverSettings.autoRefreshLogs,
+            normalized.autoRefreshLogs,
+          );
+        }
+        this.uiSettings = normalized;
+      },
+      applySettings() {
+        const enabled = this.normalizeBool(this.uiSettings.autoRefreshLogs, true);
+        this.uiSettings.autoRefreshLogs = enabled;
+        if (enabled) {
+          this.startAutoLogRefresh();
+        } else {
+          this.stopAutoLogRefresh();
+        }
+      },
+      async saveSettings(partial) {
+        if (!partial || Object.keys(partial).length === 0) {
+          return;
+        }
+        this.settingsSaving = true;
+        const payload = {};
+        Object.entries(partial).forEach(([key, value]) => {
+          if (typeof value === 'boolean') {
+            payload[key] = value ? 'true' : 'false';
+          } else if (value != null) {
+            payload[key] = String(value);
+          }
+        });
+        try {
+          await this.apiRequest('/api/settings', {
+            method: 'PUT',
+            body: JSON.stringify(payload),
+          });
+        } catch (err) {
+          this.setBanner('error', `保存设置失败：${err.message}`);
+        } finally {
+          this.settingsSaving = false;
+        }
+      },
       consumeSnapshot(snap) {
         if (!snap) return;
         const status = (snap.status || 'unknown').toLowerCase();
@@ -125,8 +195,8 @@ document.addEventListener('DOMContentLoaded', () => {
           const snap = await this.apiRequest(`/api/services/mosdns/${state ? 'start' : 'stop'}`, {
             method: 'POST',
           });
-         this.consumeSnapshot(snap);
-         this.setBanner('success', `mosdns 已${state ? '启动' : '停止'}`);
+          this.consumeSnapshot(snap);
+          this.setBanner('success', `mosdns 已${state ? '启动' : '停止'}`);
           this.loadLogs();
         } catch (err) {
           this.setBanner('error', err.message);
@@ -221,16 +291,6 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!text) return;
         this.banner = { type, text, ts: Date.now() };
       },
-      formatTime(value) {
-        if (!value) return '-';
-        const date = value instanceof Date ? value : new Date(value);
-        if (Number.isNaN(date.getTime())) return '-';
-        return date.toLocaleString('zh-CN', { hour12: false });
-      },
-      normalizeTag(release) {
-        if (!release) return '';
-        return release.tag_name || release.tagName || release.name || '';
-      },
       previewConfig() {
         this.setBanner('info', `当前配置位于 ${this.config.path}`);
         this.touchUpdate('查看配置');
@@ -276,16 +336,9 @@ document.addEventListener('DOMContentLoaded', () => {
           this.configSaving = false;
         }
       },
-      openLogsModal() {
-        this.logsModalOpen = true;
-        this.loadLogs();
-      },
-      closeLogsModal() {
-        this.logsModalOpen = false;
-      },
-      traceAction(message) {
-        this.touchUpdate(message || '记录操作');
-        this.setBanner('info', message || '已记录操作');
+      handleAutoRefreshToggle() {
+        this.applySettings();
+        this.saveSettings({ autoRefreshLogs: this.uiSettings.autoRefreshLogs });
       },
       openModal(title, message) {
         this.modal = { title: title || '提示', message: message || '' };
@@ -293,18 +346,56 @@ document.addEventListener('DOMContentLoaded', () => {
       closeModal() {
         this.modal = null;
       },
+      traceAction(message) {
+        this.touchUpdate(message || '记录操作');
+        this.setBanner('info', message || '已记录操作');
+      },
       touchUpdate(message, timestamp) {
         const stamp = this.formatTime(timestamp || new Date());
         this.mosdns.lastUpdated = stamp;
-        if (message) {
-          this.logs.unshift(`[${stamp}] ${message}`);
+      },
+      normalizeTag(release) {
+        if (!release) return '';
+        return release.tag_name || release.tagName || release.name || '';
+      },
+      formatTime(value) {
+        if (!value) return '-';
+        const date = value instanceof Date ? value : new Date(value);
+        if (Number.isNaN(date.getTime())) return '-';
+        return date.toLocaleString('zh-CN', { hour12: false });
+      },
+      normalizeBool(value, fallback) {
+        if (typeof value === 'boolean') return value;
+        if (typeof value === 'string') {
+          const lowered = value.toLowerCase();
+          if (lowered === 'true') return true;
+          if (lowered === 'false') return false;
+        }
+        return fallback;
+      },
+      startAutoLogRefresh() {
+        this.stopAutoLogRefresh();
+        this.autoRefreshTimer = setInterval(() => {
+          this.loadLogs();
+        }, 8000);
+      },
+      stopAutoLogRefresh() {
+        if (this.autoRefreshTimer) {
+          clearInterval(this.autoRefreshTimer);
+          this.autoRefreshTimer = null;
         }
       },
     },
     mounted() {
       this.loadServiceStatus();
       this.loadConfigStatus();
+      this.loadSettings();
       this.refreshVersion(true);
+      this.loadLogs();
+      this.applySettings();
+    },
+    beforeUnmount() {
+      this.stopAutoLogRefresh();
     },
   }).mount('#app');
 });
