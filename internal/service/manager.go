@@ -28,6 +28,7 @@ type ServiceSpec struct {
 	Name        string   // 业务名称，例如 mosdns
 	Unit        string   // systemd unit 名称，例如 mosdns.service
 	BinaryPaths []string // 可选：对应核心二进制路径（可多备选）
+	Hooks       ServiceHooks
 }
 
 // Snapshot 描述一个服务的即时状态。
@@ -36,6 +37,13 @@ type Snapshot struct {
 	Unit        string    `json:"unit"`
 	Status      Status    `json:"status"`
 	LastUpdated time.Time `json:"lastUpdated"`
+}
+
+// ServiceHooks 允许为特定服务注入自定义驱动逻辑（例如直接执行二进制）。
+type ServiceHooks struct {
+	Start   func(ctx context.Context, spec ServiceSpec) error
+	Stop    func(ctx context.Context, spec ServiceSpec) error
+	Restart func(ctx context.Context, spec ServiceSpec) error
 }
 
 // Manager 负责通过 systemctl 控制服务，若系统不支持则自动切换为内存模拟模式。
@@ -86,17 +94,22 @@ func (m *Manager) Start(ctx context.Context, name string) error {
 	if !m.binaryReady(spec) {
 		m.recordState(spec.Name, StatusMissing)
 		err = fmt.Errorf("%s 未安装", spec.Name)
-		logs.Errorf("[service] %s start 失败：%v", spec.Name, err)
+		logService(spec, "error", "%s start 失败：%v", spec.Name, err)
 		return err
 	}
-	if m.useCtl {
+	if spec.Hooks.Start != nil {
+		if err := spec.Hooks.Start(ctx, spec); err != nil {
+			logService(spec, "error", "自定义 start 失败：%v", err)
+			return err
+		}
+	} else if m.useCtl {
 		if err := m.execSystemctl(ctx, "start", spec.Unit); err != nil {
-			logs.Errorf("[service] systemctl start %s(%s) 失败：%v", spec.Name, spec.Unit, err)
+			logService(spec, "error", "systemctl start %s(%s) 失败：%v", spec.Name, spec.Unit, err)
 			return err
 		}
 	}
 	m.recordState(spec.Name, StatusRunning)
-	logs.Infof("[service] %s 已启动", spec.Name)
+	logService(spec, "info", "%s 已启动", spec.Name)
 	return nil
 }
 
@@ -109,17 +122,22 @@ func (m *Manager) Stop(ctx context.Context, name string) error {
 	if !m.binaryReady(spec) {
 		m.recordState(spec.Name, StatusMissing)
 		err = fmt.Errorf("%s 未安装", spec.Name)
-		logs.Errorf("[service] %s stop 失败：%v", spec.Name, err)
+		logService(spec, "error", "%s stop 失败：%v", spec.Name, err)
 		return err
 	}
-	if m.useCtl {
+	if spec.Hooks.Stop != nil {
+		if err := spec.Hooks.Stop(ctx, spec); err != nil {
+			logService(spec, "error", "自定义 stop 失败：%v", err)
+			return err
+		}
+	} else if m.useCtl {
 		if err := m.execSystemctl(ctx, "stop", spec.Unit); err != nil {
-			logs.Errorf("[service] systemctl stop %s(%s) 失败：%v", spec.Name, spec.Unit, err)
+			logService(spec, "error", "systemctl stop %s(%s) 失败：%v", spec.Name, spec.Unit, err)
 			return err
 		}
 	}
 	m.recordState(spec.Name, StatusStopped)
-	logs.Infof("[service] %s 已停止", spec.Name)
+	logService(spec, "info", "%s 已停止", spec.Name)
 	return nil
 }
 
@@ -132,22 +150,27 @@ func (m *Manager) Restart(ctx context.Context, name string) error {
 	if !m.binaryReady(spec) {
 		m.recordState(spec.Name, StatusMissing)
 		err = fmt.Errorf("%s 未安装", spec.Name)
-		logs.Errorf("[service] %s restart 失败：%v", spec.Name, err)
+		logService(spec, "error", "%s restart 失败：%v", spec.Name, err)
 		return err
 	}
-	if m.useCtl {
+	if spec.Hooks.Restart != nil {
+		if err := spec.Hooks.Restart(ctx, spec); err != nil {
+			logService(spec, "error", "自定义 restart 失败：%v", err)
+			return err
+		}
+	} else if m.useCtl {
 		if err := m.execSystemctl(ctx, "restart", spec.Unit); err != nil {
-			logs.Errorf("[service] systemctl restart %s(%s) 失败：%v", spec.Name, spec.Unit, err)
+			logService(spec, "error", "systemctl restart %s(%s) 失败：%v", spec.Name, spec.Unit, err)
 			return err
 		}
 	} else {
 		// dry run: 直接标记为 running
 		m.recordState(spec.Name, StatusRunning)
-		logs.Infof("[service] %s restart (dry-run)", spec.Name)
+		logService(spec, "info", "%s restart (dry-run)", spec.Name)
 		return nil
 	}
 	m.recordState(spec.Name, StatusRunning)
-	logs.Infof("[service] %s 已重启", spec.Name)
+	logService(spec, "info", "%s 已重启", spec.Name)
 	return nil
 }
 
@@ -159,7 +182,7 @@ func (m *Manager) Status(ctx context.Context, name string) (Snapshot, error) {
 	}
 	if !m.binaryReady(spec) {
 		m.recordState(spec.Name, StatusMissing)
-		logs.Errorf("[service] %s 状态：missing（binary 未找到）", spec.Name)
+		logService(spec, "error", "%s 状态：missing（binary 未找到）", spec.Name)
 		return m.snapshot(spec.Name), nil
 	}
 	if m.useCtl {
@@ -252,4 +275,18 @@ func (m *Manager) binaryReady(spec ServiceSpec) bool {
 		}
 	}
 	return false
+}
+
+func logService(spec ServiceSpec, level, format string, args ...any) {
+	prefix := "[service]"
+	if strings.EqualFold(spec.Name, "mosdns") {
+		prefix = "[mosdns]"
+	}
+	msg := fmt.Sprintf("%s %s", prefix, fmt.Sprintf(format, args...))
+	switch level {
+	case "error":
+		logs.Errorf(msg)
+	default:
+		logs.Infof(msg)
+	}
 }

@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strings"
@@ -26,11 +27,14 @@ func main() {
 	logBuffer := logs.NewBuffer(500)
 	logs.SetBuffer(logBuffer)
 
+	mosdnsHooks := newMosdnsHooks(configStore)
+
 	svcManager := service.NewManager([]service.ServiceSpec{
 		{
 			Name:        "mosdns",
 			Unit:        getenv("MOSDNS_UNIT", "mosdns.service"),
 			BinaryPaths: binaryCandidates("MOSDNS_BIN", "/usr/local/bin/mosdns"),
+			Hooks:       mosdnsHooks,
 		},
 		{
 			Name:        "sing-box",
@@ -342,4 +346,52 @@ func buildConfigStatus(path string) map[string]any {
 		"size":    info.Size(),
 		"modTime": info.ModTime(),
 	}
+}
+
+func newMosdnsHooks(store *config.Store) service.ServiceHooks {
+	dataDir := getenv("MOSDNS_DATA_DIR", "/etc/herobox/mosdns")
+	return service.ServiceHooks{
+		Start: func(ctx context.Context, spec service.ServiceSpec) error {
+			binary, err := firstExistingBinary(spec.BinaryPaths)
+			if err != nil {
+				return err
+			}
+			cfg := store.GetConfigPath()
+			return runCommand(ctx, binary, "start", "-c", cfg, "-d", dataDir)
+		},
+		Stop: func(ctx context.Context, spec service.ServiceSpec) error {
+			binary, err := firstExistingBinary(spec.BinaryPaths)
+			if err != nil {
+				return err
+			}
+			return runCommand(ctx, binary, "stop")
+		},
+		Restart: func(ctx context.Context, spec service.ServiceSpec) error {
+			binary, err := firstExistingBinary(spec.BinaryPaths)
+			if err != nil {
+				return err
+			}
+			cfg := store.GetConfigPath()
+			return runCommand(ctx, binary, "restart", "-c", cfg, "-d", dataDir)
+		},
+	}
+}
+
+func firstExistingBinary(paths []string) (string, error) {
+	for _, candidate := range paths {
+		if candidate == "" {
+			continue
+		}
+		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+			return candidate, nil
+		}
+	}
+	return "", fmt.Errorf("未找到可用的 mosdns 二进制路径")
+}
+
+func runCommand(ctx context.Context, binary string, args ...string) error {
+	cmd := exec.CommandContext(ctx, binary, args...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
 }
