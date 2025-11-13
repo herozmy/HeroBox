@@ -349,7 +349,7 @@ func buildConfigStatus(path string) map[string]any {
 }
 
 func newMosdnsHooks(store *config.Store) service.ServiceHooks {
-	dataDir := getenv("MOSDNS_DATA_DIR", "/etc/herobox/mosdns")
+	defaultDataDir := getenv("MOSDNS_DATA_DIR", "")
 	return service.ServiceHooks{
 		Start: func(ctx context.Context, spec service.ServiceSpec) error {
 			binary, err := firstExistingBinary(spec.BinaryPaths)
@@ -357,6 +357,7 @@ func newMosdnsHooks(store *config.Store) service.ServiceHooks {
 				return err
 			}
 			cfg := store.GetConfigPath()
+			dataDir := resolveMosdnsDataDir(defaultDataDir, cfg)
 			return runCommand(ctx, binary, "start", "-c", cfg, "-d", dataDir)
 		},
 		Stop: func(ctx context.Context, spec service.ServiceSpec) error {
@@ -372,9 +373,24 @@ func newMosdnsHooks(store *config.Store) service.ServiceHooks {
 				return err
 			}
 			cfg := store.GetConfigPath()
+			dataDir := resolveMosdnsDataDir(defaultDataDir, cfg)
 			return runCommand(ctx, binary, "restart", "-c", cfg, "-d", dataDir)
 		},
 	}
+}
+
+func resolveMosdnsDataDir(envDir, configPath string) string {
+	if envDir != "" {
+		return envDir
+	}
+	if configPath == "" {
+		return "/etc/herobox/mosdns"
+	}
+	dir := filepath.Dir(configPath)
+	if dir == "." {
+		return "/etc/herobox/mosdns"
+	}
+	return dir
 }
 
 func firstExistingBinary(paths []string) (string, error) {
