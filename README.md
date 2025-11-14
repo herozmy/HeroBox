@@ -49,7 +49,7 @@ MYBOX_ADDR=:8080 ./mybox
   - `mosdns.configPath`: 前端配置的 mosdns 配置文件路径。
   - `mosdns.status`: 最近一次查询到的 mosdns 状态（`running`/`stopped`/`missing`）。
   - `uiSettings`: 前端的个性化设置（如 `autoRefreshLogs`）。
-- 每次在前端修改 mosdns 配置路径、切换自动刷新日志等设置后，后端都会立即写入该 YAML 文件；重启程序会自动加载这些默认值，并根据最新路径调整 mosdns 启动命令的 `-c/-d` 参数。
+- 每次在前端修改 mosdns 配置路径、切换自动刷新日志等设置后，后端都会立即写入该 YAML 文件；重启程序会自动加载这些默认值，并根据最新路径调整 mosdns 启动命令的 `-c/-d` 参数。配置目录预览会自动过滤 dump 缓存文件，仅展示真实配置内容。
 
 ## API 摘要
 

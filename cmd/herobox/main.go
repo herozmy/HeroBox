@@ -447,6 +447,9 @@ func collectMosdnsFiles(path string) ([]configFile, string, error) {
 		if entry.IsDir() {
 			continue
 		}
+		if isDumpCacheFile(entry.Name()) {
+			continue
+		}
 		full := filepath.Join(dir, entry.Name())
 		data, err := os.ReadFile(full)
 		if err != nil {
@@ -455,6 +458,17 @@ func collectMosdnsFiles(path string) ([]configFile, string, error) {
 		files = append(files, configFile{Name: entry.Name(), Content: string(data)})
 	}
 	return files, dir, nil
+}
+
+func isDumpCacheFile(name string) bool {
+	lower := strings.ToLower(name)
+	if lower == "dump" || lower == "dump.cache" {
+		return true
+	}
+	if strings.Contains(lower, "dump") && (strings.HasSuffix(lower, ".cache") || strings.HasSuffix(lower, ".bin")) {
+		return true
+	}
+	return false
 }
 
 func newMosdnsHooks(store *config.Store) service.ServiceHooks {
