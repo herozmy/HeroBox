@@ -78,22 +78,29 @@
               <button class="alert__close" @click="closePreviewModal">×</button>
             </div>
             <p class="muted">当前目录：{{ previewDirLabel }}</p>
-            <div class="preview-layout" v-if="previewFiles.length">
-              <div class="preview-file-list">
+            <div class="preview-layout" v-if="previewFlatList.length">
+              <div class="preview-tree">
                 <button
-                  v-for="file in previewFiles"
-                  :key="file.name"
-                  class="preview-file"
-                  :class="{ active: file.name === previewActiveFile }"
-                  @click="selectPreviewFile(file.name)"
+                  v-for="node in previewFlatList"
+                  :key="node.key"
+                  class="preview-node"
+                  :class="{ active: !node.isDir && node.path === previewActiveFile }"
+                  :style="{ paddingLeft: (node.level * 16) + 'px' }"
+                  @click="handlePreviewNodeClick(node)"
                 >
-                  {{ file.name }}
+                  <span class="preview-node__icon">
+                    <template v-if="node.isDir">{{ node.expanded ? '▼' : '▶' }}</template>
+                    <template v-else>•</template>
+                  </span>
+                  <span>{{ node.name }}</span>
                 </button>
               </div>
               <textarea
                 class="modal__textarea"
                 :value="previewDisplayedContent"
-                readonly
+                @input="handlePreviewInput"
+                :readonly="!previewActiveFile"
+                placeholder="选择左侧的配置文件以查看和编辑"
               ></textarea>
             </div>
             <p class="muted" v-else>目录为空或无可预览的配置文件。</p>
@@ -101,6 +108,9 @@
             <div class="button-row modal__actions">
               <button class="btn" @click="reloadPreview" :disabled="previewLoading">
                 {{ previewLoading ? '读取中…' : '重新加载' }}
+              </button>
+              <button class="btn" @click="savePreviewFile" :disabled="previewSaving || !previewActiveFile">
+                {{ previewSaving ? '保存中…' : '保存' }}
               </button>
               <button class="btn primary" @click="closePreviewModal">关闭</button>
             </div>

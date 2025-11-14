@@ -36,11 +36,15 @@ document.addEventListener('DOMContentLoaded', () => {
         settingsSaving: false,
         autoRefreshTimer: null,
         previewModalOpen: false,
-        previewFiles: [],
+        previewTree: [],
+        previewFlatList: [],
+        previewExpanded: {},
         previewActiveFile: '',
+        previewEditingContent: '',
         previewDir: '',
         previewLoading: false,
         previewError: '',
+        previewSaving: false,
       };
     },
     computed: {
@@ -82,11 +86,7 @@ document.addEventListener('DOMContentLoaded', () => {
         return '已停止';
       },
       previewDisplayedContent() {
-        if (!this.previewFiles.length) return '';
-        const active =
-          this.previewFiles.find((item) => item.name === this.previewActiveFile) ||
-          this.previewFiles[0];
-        return active ? active.content : '';
+        return this.previewEditingContent;
       },
       previewDirLabel() {
         if (this.previewDir) return this.previewDir;
@@ -130,40 +130,6 @@ document.addEventListener('DOMContentLoaded', () => {
       },
       closeLogsModal() {
         this.logsModalOpen = false;
-      },
-      openPreviewModal() {
-        this.previewModalOpen = true;
-        this.previewLoading = true;
-        this.previewError = '';
-        this.previewFiles = [];
-        this.previewActiveFile = '';
-        this.previewDir = '';
-      },
-      closePreviewModal() {
-        this.previewModalOpen = false;
-      },
-      async loadPreviewContent() {
-        this.previewLoading = true;
-        this.previewError = '';
-        try {
-          const payload = await this.apiRequest('/api/mosdns/config/content');
-          const files = Array.isArray(payload.files) ? payload.files : [];
-          this.previewFiles = files;
-          this.previewDir = payload.dir || '';
-          this.previewActiveFile = files.length ? files[0].name : '';
-        } catch (err) {
-          this.previewError = err.message;
-          this.previewFiles = [];
-          this.previewActiveFile = '';
-        } finally {
-          this.previewLoading = false;
-        }
-      },
-      reloadPreview() {
-        this.loadPreviewContent();
-      },
-      selectPreviewFile(name) {
-        this.previewActiveFile = name;
       },
       async loadConfigStatus() {
         try {
@@ -446,10 +412,118 @@ document.addEventListener('DOMContentLoaded', () => {
         this.previewModalOpen = true;
         this.previewLoading = true;
         this.previewError = '';
-        this.previewContent = '';
+        this.previewSaving = false;
+        this.previewExpanded = {};
+        this.previewTree = [];
+        this.previewFlatList = [];
+        this.previewActiveFile = '';
+        this.previewEditingContent = '';
+        this.previewDir = '';
       },
       closePreviewModal() {
         this.previewModalOpen = false;
+      },
+      async loadPreviewContent() {
+        this.previewLoading = true;
+        this.previewError = '';
+        try {
+          const payload = await this.apiRequest('/api/mosdns/config/content');
+          this.previewTree = Array.isArray(payload.tree) ? payload.tree : [];
+          this.previewDir = payload.dir || '';
+          this.previewExpanded = {};
+          this.updatePreviewList();
+          const firstFile = this.previewFlatList.find((item) => !item.isDir);
+          if (firstFile) {
+            this.previewActiveFile = firstFile.path;
+            this.previewEditingContent = firstFile.content || '';
+          } else {
+            this.previewActiveFile = '';
+            this.previewEditingContent = '';
+          }
+        } catch (err) {
+          this.previewError = err.message;
+          this.previewTree = [];
+          this.previewFlatList = [];
+          this.previewActiveFile = '';
+          this.previewEditingContent = '';
+        } finally {
+          this.previewLoading = false;
+        }
+      },
+      updatePreviewList() {
+        this.previewFlatList = this.flattenPreviewNodes(this.previewTree, 0);
+      },
+      flattenPreviewNodes(nodes, level) {
+        if (!nodes) return [];
+        const list = [];
+        nodes.forEach((node) => {
+          const key = this.previewNodeKey(node);
+          const isExpanded = this.previewExpanded[key] !== false;
+          const item = {
+            name: node.name,
+            path: node.path,
+            isDir: !!node.isDir,
+            content: node.content,
+            level,
+            key,
+            children: node.children || [],
+            expanded: isExpanded,
+          };
+          list.push(item);
+          if (item.isDir && isExpanded) {
+            list.push(...this.flattenPreviewNodes(item.children, level + 1));
+          }
+        });
+        return list;
+      },
+      previewNodeKey(node) {
+        return node.path || node.name || '';
+      },
+      handlePreviewNodeClick(item) {
+        if (item.isDir) {
+          this.previewExpanded[item.key] = !item.expanded;
+          this.updatePreviewList();
+        } else {
+          this.previewActiveFile = item.path;
+          this.previewEditingContent = item.content || '';
+        }
+      },
+      handlePreviewInput(event) {
+        this.previewEditingContent = event.target.value;
+      },
+      async savePreviewFile() {
+        if (!this.previewActiveFile) return;
+        this.previewSaving = true;
+        try {
+          await this.apiRequest(`/api/mosdns/config/file?file=${encodeURIComponent(this.previewActiveFile)}`, {
+            method: 'PUT',
+            body: JSON.stringify({ path: this.previewActiveFile, content: this.previewEditingContent }),
+          });
+          this.updateTreeContent(this.previewActiveFile, this.previewEditingContent);
+          this.setBanner('success', `${this.previewActiveFile} 已保存`);
+        } catch (err) {
+          this.setBanner('error', `保存失败：${err.message}`);
+        } finally {
+          this.previewSaving = false;
+        }
+      },
+      updateTreeContent(path, content) {
+        const update = (nodes) => {
+          if (!nodes) return;
+          nodes.forEach((node) => {
+            if (node.path === path && !node.isDir) {
+              node.content = content;
+            }
+            if (node.children) {
+              update(node.children);
+            }
+          });
+        };
+        update(this.previewTree);
+        this.updatePreviewList();
+      },
+      reloadPreview() {
+        this.loadPreviewContent();
       },
       traceAction(message) {
         this.touchUpdate(message || '记录操作');
