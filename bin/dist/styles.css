@@ -408,6 +408,11 @@ body {
   overflow-y: auto;
 }
 
+.preview-layout .modal__textarea {
+  flex: 1;
+  min-height: 320px;
+}
+
 .preview-file {
   border: none;
   background: transparent;
@@ -421,6 +426,23 @@ body {
 .preview-file.active {
   background: var(--brand-soft);
   color: var(--brand);
+}
+
+@media (max-width: 768px) {
+  .preview-layout {
+    flex-direction: column;
+  }
+
+  .preview-file-list {
+    width: 100%;
+    flex-direction: row;
+    flex-wrap: wrap;
+    max-height: none;
+  }
+
+  .preview-file {
+    flex: 1 1 45%;
+  }
 }
 
 @media (max-width: 520px) {

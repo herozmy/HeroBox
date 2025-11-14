@@ -93,7 +93,7 @@
               <textarea
                 class="modal__textarea"
                 :value="previewDisplayedContent"
-                readonly
+                @input="handlePreviewInput"
               ></textarea>
             </div>
             <p class="muted" v-else>目录为空或无可预览的配置文件。</p>
@@ -101,6 +101,9 @@
             <div class="button-row modal__actions">
               <button class="btn" @click="reloadPreview" :disabled="previewLoading">
                 {{ previewLoading ? '读取中…' : '重新加载' }}
+              </button>
+              <button class="btn" @click="savePreviewFile" :disabled="previewSaving || !previewActiveFile">
+                {{ previewSaving ? '保存中…' : '保存' }}
               </button>
               <button class="btn primary" @click="closePreviewModal">关闭</button>
             </div>

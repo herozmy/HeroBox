@@ -38,9 +38,11 @@ document.addEventListener('DOMContentLoaded', () => {
         previewModalOpen: false,
         previewFiles: [],
         previewActiveFile: '',
+        previewEditingContent: '',
         previewDir: '',
         previewLoading: false,
         previewError: '',
+        previewSaving: false,
       };
     },
     computed: {
@@ -82,11 +84,7 @@ document.addEventListener('DOMContentLoaded', () => {
         return '已停止';
       },
       previewDisplayedContent() {
-        if (!this.previewFiles.length) return '';
-        const active =
-          this.previewFiles.find((item) => item.name === this.previewActiveFile) ||
-          this.previewFiles[0];
-        return active ? active.content : '';
+        return this.previewEditingContent;
       },
       previewDirLabel() {
         if (this.previewDir) return this.previewDir;
@@ -150,17 +148,52 @@ document.addEventListener('DOMContentLoaded', () => {
           const files = Array.isArray(payload.files) ? payload.files : [];
           this.previewFiles = files;
           this.previewDir = payload.dir || '';
-          this.previewActiveFile = files.length ? files[0].name : '';
+          if (files.length) {
+            this.previewActiveFile = files[0].name;
+            this.previewEditingContent = files[0].content;
+          } else {
+            this.previewActiveFile = '';
+            this.previewEditingContent = '';
+          }
         } catch (err) {
           this.previewError = err.message;
           this.previewFiles = [];
           this.previewActiveFile = '';
+          this.previewEditingContent = '';
         } finally {
           this.previewLoading = false;
         }
       },
       reloadPreview() {
         this.loadPreviewContent();
+      },
+      selectPreviewFile(name) {
+        const target = this.previewFiles.find((item) => item.name === name);
+        if (!target) return;
+        this.previewActiveFile = name;
+        this.previewEditingContent = target.content;
+      },
+      handlePreviewInput(event) {
+        this.previewEditingContent = event.target.value;
+      },
+      async savePreviewFile() {
+        if (!this.previewActiveFile) return;
+        this.previewSaving = true;
+        try {
+          await this.apiRequest('/api/mosdns/config/file?file=' + encodeURIComponent(this.previewActiveFile), {
+            method: 'PUT',
+            body: JSON.stringify({ path: this.previewActiveFile, content: this.previewEditingContent }),
+          });
+          const idx = this.previewFiles.findIndex((item) => item.name === this.previewActiveFile);
+          if (idx >= 0) {
+            this.previewFiles[idx] = { ...this.previewFiles[idx], content: this.previewEditingContent };
+          }
+          this.setBanner('success', `${this.previewActiveFile} 已保存`);
+        } catch (err) {
+          this.setBanner('error', `保存失败：${err.message}`);
+        } finally {
+          this.previewSaving = false;
+        }
       },
       selectPreviewFile(name) {
         this.previewActiveFile = name;
