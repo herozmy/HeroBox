@@ -71,6 +71,28 @@
           </div>
         </div>
 
+        <div v-if="previewModalOpen" class="modal-backdrop" @click.self="closePreviewModal">
+          <div class="modal modal--logs">
+            <div class="modal__header">
+              <h3>配置预览</h3>
+              <button class="alert__close" @click="closePreviewModal">×</button>
+            </div>
+            <p class="muted">当前路径：{{ config.path }}</p>
+            <textarea
+              class="modal__textarea"
+              :value="previewContent"
+              readonly
+            ></textarea>
+            <p class="muted" v-if="previewError">{{ previewError }}</p>
+            <div class="button-row modal__actions">
+              <button class="btn" @click="reloadPreview" :disabled="previewLoading">
+                {{ previewLoading ? '读取中…' : '重新加载' }}
+              </button>
+              <button class="btn primary" @click="closePreviewModal">关闭</button>
+            </div>
+          </div>
+        </div>
+
         <header class="content__header">
           <div>
             <div class="muted">基础信息</div>

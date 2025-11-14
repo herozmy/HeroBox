@@ -146,6 +146,23 @@ func main() {
 		})
 	})
 
+	mux.HandleFunc("/api/mosdns/config/content", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			methodNotAllowed(w)
+			return
+		}
+		path := configStore.GetConfigPath()
+		data, err := os.ReadFile(path)
+		if err != nil {
+			respondErr(w, fmt.Errorf("读取配置失败: %w", err))
+			return
+		}
+		respondJSON(w, map[string]any{
+			"path":    path,
+			"content": string(data),
+		})
+	})
+
 	mux.HandleFunc("/api/settings", func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:

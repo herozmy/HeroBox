@@ -376,6 +376,19 @@ body {
   box-shadow: 0 0 0 2px rgba(31, 122, 236, 0.15);
 }
 
+.modal__textarea {
+  width: 100%;
+  min-height: 280px;
+  border-radius: 12px;
+  border: 1px solid rgba(15, 23, 42, 0.15);
+  padding: 12px;
+  font-family: 'SFMono-Regular', Consolas, 'Courier New', monospace;
+  font-size: 13px;
+  outline: none;
+  resize: vertical;
+  background: #f8fafc;
+}
+
 @media (max-width: 520px) {
   .cards {
     grid-template-columns: 1fr;

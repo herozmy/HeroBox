@@ -35,6 +35,10 @@ document.addEventListener('DOMContentLoaded', () => {
         settingsLoading: false,
         settingsSaving: false,
         autoRefreshTimer: null,
+        previewModalOpen: false,
+        previewContent: '',
+        previewLoading: false,
+        previewError: '',
       };
     },
     computed: {
@@ -102,12 +106,30 @@ document.addEventListener('DOMContentLoaded', () => {
           this.logsLoading = false;
         }
       },
+      async loadPreviewContent() {
+        this.previewLoading = true;
+        this.previewError = '';
+        try {
+          const payload = await this.apiRequest('/api/mosdns/config/content');
+          this.previewContent = payload.content || '';
+        } catch (err) {
+          this.previewError = err.message;
+        } finally {
+          this.previewLoading = false;
+        }
+      },
+      reloadPreview() {
+        this.loadPreviewContent();
+      },
       openLogsModal() {
         this.logsModalOpen = true;
         this.loadLogs();
       },
       closeLogsModal() {
         this.logsModalOpen = false;
+      },
+      closePreviewModal() {
+        this.previewModalOpen = false;
       },
       async loadConfigStatus() {
         try {
