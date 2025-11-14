@@ -77,12 +77,26 @@
               <h3>配置预览</h3>
               <button class="alert__close" @click="closePreviewModal">×</button>
             </div>
-            <p class="muted">当前路径：{{ config.path }}</p>
-            <textarea
-              class="modal__textarea"
-              :value="previewContent"
-              readonly
-            ></textarea>
+            <p class="muted">当前目录：{{ previewDirLabel }}</p>
+            <div class="preview-layout" v-if="previewFiles.length">
+              <div class="preview-file-list">
+                <button
+                  v-for="file in previewFiles"
+                  :key="file.name"
+                  class="preview-file"
+                  :class="{ active: file.name === previewActiveFile }"
+                  @click="selectPreviewFile(file.name)"
+                >
+                  {{ file.name }}
+                </button>
+              </div>
+              <textarea
+                class="modal__textarea"
+                :value="previewDisplayedContent"
+                readonly
+              ></textarea>
+            </div>
+            <p class="muted" v-else>目录为空或无可预览的配置文件。</p>
             <p class="muted" v-if="previewError">{{ previewError }}</p>
             <div class="button-row modal__actions">
               <button class="btn" @click="reloadPreview" :disabled="previewLoading">

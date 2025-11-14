@@ -152,14 +152,15 @@ func main() {
 			return
 		}
 		path := configStore.GetConfigPath()
-		data, err := os.ReadFile(path)
+		files, dir, err := collectMosdnsFiles(path)
 		if err != nil {
-			respondErr(w, fmt.Errorf("读取配置失败: %w", err))
+			respondErr(w, err)
 			return
 		}
 		respondJSON(w, map[string]any{
-			"path":    path,
-			"content": string(data),
+			"path":  path,
+			"dir":   dir,
+			"files": files,
 		})
 	})
 
@@ -416,6 +417,44 @@ func updateMosdnsState(store *config.Store, snaps ...service.Snapshot) {
 		}
 		_ = store.SetMosdnsStatus(string(snap.Status))
 	}
+}
+
+type configFile struct {
+	Name    string `json:"name"`
+	Content string `json:"content"`
+}
+
+func collectMosdnsFiles(path string) ([]configFile, string, error) {
+	if path == "" {
+		return nil, "", fmt.Errorf("配置路径为空")
+	}
+	info, err := os.Stat(path)
+	var dir string
+	if err == nil && info.IsDir() {
+		dir = path
+	} else {
+		dir = filepath.Dir(path)
+	}
+	if dir == "" {
+		dir = "."
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, dir, fmt.Errorf("读取配置目录失败: %w", err)
+	}
+	files := make([]configFile, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		full := filepath.Join(dir, entry.Name())
+		data, err := os.ReadFile(full)
+		if err != nil {
+			return nil, dir, fmt.Errorf("读取配置失败: %w", err)
+		}
+		files = append(files, configFile{Name: entry.Name(), Content: string(data)})
+	}
+	return files, dir, nil
 }
 
 func newMosdnsHooks(store *config.Store) service.ServiceHooks {

@@ -36,7 +36,9 @@ document.addEventListener('DOMContentLoaded', () => {
         settingsSaving: false,
         autoRefreshTimer: null,
         previewModalOpen: false,
-        previewContent: '',
+        previewFiles: [],
+        previewActiveFile: '',
+        previewDir: '',
         previewLoading: false,
         previewError: '',
       };
@@ -79,6 +81,22 @@ document.addEventListener('DOMContentLoaded', () => {
         if (this.isMissing) return '未安装';
         return '已停止';
       },
+      previewDisplayedContent() {
+        if (!this.previewFiles.length) return '';
+        const active =
+          this.previewFiles.find((item) => item.name === this.previewActiveFile) ||
+          this.previewFiles[0];
+        return active ? active.content : '';
+      },
+      previewDirLabel() {
+        if (this.previewDir) return this.previewDir;
+        if (this.config.path) {
+          const parts = this.config.path.split('/');
+          parts.pop();
+          return parts.join('/') || '/';
+        }
+        return '未知目录';
+      },
     },
     methods: {
       async loadServiceStatus() {
@@ -106,21 +124,6 @@ document.addEventListener('DOMContentLoaded', () => {
           this.logsLoading = false;
         }
       },
-      async loadPreviewContent() {
-        this.previewLoading = true;
-        this.previewError = '';
-        try {
-          const payload = await this.apiRequest('/api/mosdns/config/content');
-          this.previewContent = payload.content || '';
-        } catch (err) {
-          this.previewError = err.message;
-        } finally {
-          this.previewLoading = false;
-        }
-      },
-      reloadPreview() {
-        this.loadPreviewContent();
-      },
       openLogsModal() {
         this.logsModalOpen = true;
         this.loadLogs();
@@ -128,8 +131,39 @@ document.addEventListener('DOMContentLoaded', () => {
       closeLogsModal() {
         this.logsModalOpen = false;
       },
+      openPreviewModal() {
+        this.previewModalOpen = true;
+        this.previewLoading = true;
+        this.previewError = '';
+        this.previewFiles = [];
+        this.previewActiveFile = '';
+        this.previewDir = '';
+      },
       closePreviewModal() {
         this.previewModalOpen = false;
+      },
+      async loadPreviewContent() {
+        this.previewLoading = true;
+        this.previewError = '';
+        try {
+          const payload = await this.apiRequest('/api/mosdns/config/content');
+          const files = Array.isArray(payload.files) ? payload.files : [];
+          this.previewFiles = files;
+          this.previewDir = payload.dir || '';
+          this.previewActiveFile = files.length ? files[0].name : '';
+        } catch (err) {
+          this.previewError = err.message;
+          this.previewFiles = [];
+          this.previewActiveFile = '';
+        } finally {
+          this.previewLoading = false;
+        }
+      },
+      reloadPreview() {
+        this.loadPreviewContent();
+      },
+      selectPreviewFile(name) {
+        this.previewActiveFile = name;
       },
       async loadConfigStatus() {
         try {
@@ -354,8 +388,8 @@ document.addEventListener('DOMContentLoaded', () => {
         this.banner = { type, text, ts: Date.now() };
       },
       previewConfig() {
-        this.setBanner('info', `当前配置位于 ${this.config.path}`);
-        this.touchUpdate('查看配置');
+        this.openPreviewModal();
+        this.loadPreviewContent();
       },
       syncConfig() {
         const stamp = new Date();
@@ -407,6 +441,15 @@ document.addEventListener('DOMContentLoaded', () => {
       },
       closeModal() {
         this.modal = null;
+      },
+      openPreviewModal() {
+        this.previewModalOpen = true;
+        this.previewLoading = true;
+        this.previewError = '';
+        this.previewContent = '';
+      },
+      closePreviewModal() {
+        this.previewModalOpen = false;
       },
       traceAction(message) {
         this.touchUpdate(message || '记录操作');
