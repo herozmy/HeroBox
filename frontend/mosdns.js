@@ -1,4 +1,5 @@
 const { createApp } = Vue;
+const LATEST_VERSION_CACHE_KEY = 'herobox.mosdns.latestVersion';
 
 document.addEventListener('DOMContentLoaded', () => {
   createApp({
@@ -99,6 +100,24 @@ document.addEventListener('DOMContentLoaded', () => {
       },
     },
     methods: {
+      restoreLatestVersion() {
+        try {
+          const cached = window.localStorage.getItem(LATEST_VERSION_CACHE_KEY);
+          if (cached) {
+            this.mosdns.latestVersion = cached;
+          }
+        } catch (err) {
+          // 忽略本地存储异常
+        }
+      },
+      persistLatestVersion(tag) {
+        if (!tag) return;
+        try {
+          window.localStorage.setItem(LATEST_VERSION_CACHE_KEY, tag);
+        } catch (err) {
+          // 忽略本地存储异常
+        }
+      },
       async loadServiceStatus() {
         this.stateLoading = true;
         try {
@@ -213,6 +232,12 @@ document.addEventListener('DOMContentLoaded', () => {
         this.mosdns.running = status === 'running';
         this.mosdns.lastUpdated = this.formatTime(snap.lastUpdated);
         this.config.lastSynced = this.mosdns.lastUpdated;
+        if (typeof snap.version === 'string') {
+          const normalizedVersion = snap.version.trim();
+          if (normalizedVersion) {
+            this.mosdns.version = normalizedVersion;
+          }
+        }
         if (status === 'missing') {
           this.mosdns.version = '未安装';
           this.setBanner('error', '未检测到 mosdns 核心，请先执行“检查更新”或“一键更新”。');
@@ -277,10 +302,8 @@ document.addEventListener('DOMContentLoaded', () => {
           const release = await this.apiRequest('/api/mosdns/kernel/latest');
           const tag = this.normalizeTag(release);
           if (tag) {
+            this.persistLatestVersion(tag);
             this.mosdns.latestVersion = tag;
-            if (this.mosdns.version === '-' || this.mosdns.version === '') {
-              this.mosdns.version = tag;
-            }
           }
           if (!silent) {
             this.setBanner('success', '已获取最新版本信息');
@@ -304,8 +327,8 @@ document.addEventListener('DOMContentLoaded', () => {
           });
           const tag = this.normalizeTag(payload.release);
           if (tag) {
-            this.mosdns.version = tag;
             this.mosdns.latestVersion = tag;
+            this.persistLatestVersion(tag);
           }
           if (payload.binary) {
             this.setBanner('success', `更新完成，已写入 ${payload.binary}`);
@@ -316,7 +339,6 @@ document.addEventListener('DOMContentLoaded', () => {
           }
           this.mosdns.status = 'stopped';
           this.mosdns.running = false;
-          this.mosdns.version = tag || this.mosdns.version;
           this.mosdns.lastUpdated = this.formatTime(new Date());
           await this.loadServiceStatus();
           await this.loadConfigStatus();
@@ -566,10 +588,10 @@ document.addEventListener('DOMContentLoaded', () => {
       },
     },
     mounted() {
+      this.restoreLatestVersion();
       this.loadServiceStatus();
       this.loadConfigStatus();
       this.loadSettings();
-      this.refreshVersion(true);
       this.loadLogs();
       this.applySettings();
     },

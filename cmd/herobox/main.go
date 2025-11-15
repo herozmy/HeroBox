@@ -21,6 +21,8 @@ import (
 	"github.com/herozmy/herobox/internal/service"
 )
 
+var mosdnsBinaryPaths []string
+
 func main() {
 	addr := getenv("HEROBOX_ADDR", ":8080")
 	configStore, err := config.NewStore(
@@ -37,12 +39,16 @@ func main() {
 	logs.SetBuffer(logBuffer)
 
 	mosdnsHooks := newMosdnsHooks(configStore)
+	mosdnsBinaryPaths = binaryCandidates("MOSDNS_BIN", "/usr/local/bin/mosdns")
+	if configStore.MosdnsVersion() == "" {
+		refreshMosdnsVersion(configStore, mosdnsBinaryPaths)
+	}
 
 	svcManager := service.NewManager([]service.ServiceSpec{
 		{
 			Name:        "mosdns",
 			Unit:        getenv("MOSDNS_UNIT", "mosdns.service"),
-			BinaryPaths: binaryCandidates("MOSDNS_BIN", "/usr/local/bin/mosdns"),
+			BinaryPaths: mosdnsBinaryPaths,
 			Hooks:       mosdnsHooks,
 		},
 		{
@@ -74,7 +80,10 @@ func main() {
 			respondErr(w, err)
 			return
 		}
-		updateMosdnsState(configStore, snaps...)
+		updateMosdnsState(configStore, mosdnsBinaryPaths, snaps...)
+		for i := range snaps {
+			applyMosdnsVersion(configStore, &snaps[i])
+		}
 		respondJSON(w, snaps)
 	})
 	mux.Handle("/api/services/", http.StripPrefix("/api/services", serviceHandler(svcManager, configStore)))
@@ -106,6 +115,7 @@ func main() {
 			respondErr(w, err)
 			return
 		}
+		refreshMosdnsVersion(configStore, mosdnsBinaryPaths)
 		respondJSON(w, map[string]any{
 			"release": rel,
 			"binary":  path,
@@ -229,7 +239,8 @@ func serviceHandler(mgr *service.Manager, store *config.Store) http.Handler {
 				respondErr(w, err)
 				return
 			}
-			updateMosdnsState(store, snap)
+			updateMosdnsState(store, mosdnsBinaryPaths, snap)
+			applyMosdnsVersion(store, &snap)
 			respondJSON(w, snap)
 		case http.MethodPost:
 			if len(parts) < 2 {
@@ -260,7 +271,8 @@ func serviceHandler(mgr *service.Manager, store *config.Store) http.Handler {
 				respondErr(w, err)
 				return
 			}
-			updateMosdnsState(store, snap)
+			updateMosdnsState(store, mosdnsBinaryPaths, snap)
+			applyMosdnsVersion(store, &snap)
 			respondJSON(w, snap)
 		default:
 			methodNotAllowed(w)
@@ -407,7 +419,7 @@ func defaultConfigFile() string {
 	return "herobox.yaml"
 }
 
-func updateMosdnsState(store *config.Store, snaps ...service.Snapshot) {
+func updateMosdnsState(store *config.Store, binPaths []string, snaps ...service.Snapshot) {
 	if store == nil {
 		return
 	}
@@ -416,7 +428,96 @@ func updateMosdnsState(store *config.Store, snaps ...service.Snapshot) {
 			continue
 		}
 		_ = store.SetMosdnsStatus(string(snap.Status))
+		if snap.Status == service.StatusMissing {
+			continue
+		}
+		refreshMosdnsVersion(store, binPaths)
 	}
+}
+
+func applyMosdnsVersion(store *config.Store, snap *service.Snapshot) {
+	if store == nil || snap == nil {
+		return
+	}
+	if !strings.EqualFold(snap.Name, "mosdns") {
+		return
+	}
+	snap.Version = store.MosdnsVersion()
+}
+
+func refreshMosdnsVersion(store *config.Store, binPaths []string) {
+	if store == nil || len(binPaths) == 0 {
+		return
+	}
+	version, err := detectMosdnsVersion(binPaths)
+	if err != nil {
+		log.Printf("检测 mosdns 版本失败: %v", err)
+		return
+	}
+	if version == "" {
+		return
+	}
+	if err := store.SetMosdnsVersion(version); err != nil {
+		log.Printf("记录 mosdns 版本失败: %v", err)
+	}
+}
+
+func detectMosdnsVersion(binPaths []string) (string, error) {
+	if len(binPaths) == 0 {
+		return "", fmt.Errorf("未配置 mosdns binary 路径")
+	}
+	binary, err := firstExistingBinary(binPaths)
+	if err != nil {
+		return "", err
+	}
+	version, runErr := runMosdnsVersionCommand(binary, "version")
+	if runErr != nil {
+		version, runErr = runMosdnsVersionCommand(binary, "--version")
+	}
+	if runErr != nil {
+		return "", runErr
+	}
+	return version, nil
+}
+
+func runMosdnsVersionCommand(binary, arg string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, binary, arg)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", err
+	}
+	version := normalizeMosdnsVersion(string(output))
+	if version == "" {
+		return "", fmt.Errorf("mosdns %s 输出为空", arg)
+	}
+	return version, nil
+}
+
+func normalizeMosdnsVersion(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return ""
+	}
+	line := trimmed
+	if idx := strings.IndexRune(line, '\n'); idx >= 0 {
+		line = strings.TrimSpace(line[:idx])
+	}
+	fields := strings.Fields(line)
+	for i := len(fields) - 1; i >= 0; i-- {
+		token := strings.Trim(fields[i], ":")
+		if token == "" {
+			continue
+		}
+		if strings.ContainsAny(token, "0123456789") {
+			return token
+		}
+	}
+	if line != "" {
+		return line
+	}
+	return trimmed
 }
 
 type configFile struct {

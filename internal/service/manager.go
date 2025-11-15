@@ -37,6 +37,7 @@ type Snapshot struct {
 	Unit        string    `json:"unit"`
 	Status      Status    `json:"status"`
 	LastUpdated time.Time `json:"lastUpdated"`
+	Version     string    `json:"version,omitempty"`
 }
 
 // ServiceHooks 允许为特定服务注入自定义驱动逻辑（例如直接执行二进制）。

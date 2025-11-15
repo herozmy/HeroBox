@@ -12,13 +12,14 @@ import (
 
 // Store 持久化保存可在前端调整的配置信息，例如 mosdns 配置路径与 UI 设置。
 type Store struct {
-	mu          sync.RWMutex
-	configPath  string
-	heroboxPort string
-	mosdnsState string
-	mosdnsPID   int
-	uiSettings  map[string]string
-	filePath    string
+	mu            sync.RWMutex
+	configPath    string
+	heroboxPort   string
+	mosdnsState   string
+	mosdnsPID     int
+	mosdnsVersion string
+	uiSettings    map[string]string
+	filePath      string
 }
 
 type fileState struct {
@@ -28,6 +29,7 @@ type fileState struct {
 		ConfigPath string `yaml:"configPath"`
 		Status     string `yaml:"status"`
 		PID        int    `yaml:"pid"`
+		Version    string `yaml:"version"`
 	} `yaml:"mosdns"`
 }
 
@@ -85,6 +87,20 @@ func (s *Store) MosdnsPID() int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.mosdnsPID
+}
+
+func (s *Store) SetMosdnsVersion(version string) error {
+	version = strings.TrimSpace(version)
+	s.mu.Lock()
+	s.mosdnsVersion = version
+	s.mu.Unlock()
+	return s.persist()
+}
+
+func (s *Store) MosdnsVersion() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.mosdnsVersion
 }
 
 func (s *Store) SetHeroboxPort(port string) error {
@@ -146,6 +162,7 @@ func (s *Store) load() error {
 	}
 	s.mosdnsState = state.Mosdns.Status
 	s.mosdnsPID = state.Mosdns.PID
+	s.mosdnsVersion = state.Mosdns.Version
 	if len(state.UISettings) > 0 {
 		if s.uiSettings == nil {
 			s.uiSettings = make(map[string]string)
@@ -179,6 +196,7 @@ func (s *Store) persist() error {
 	state.Mosdns.ConfigPath = s.configPath
 	state.Mosdns.Status = s.mosdnsState
 	state.Mosdns.PID = s.mosdnsPID
+	state.Mosdns.Version = s.mosdnsVersion
 	s.mu.RUnlock()
 
 	data, err := yaml.Marshal(&state)
