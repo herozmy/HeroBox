@@ -1,10 +1,12 @@
 package main
 
 import (
+	"archive/zip"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -14,6 +16,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"unicode"
 
 	"github.com/herozmy/herobox/internal/config"
 	"github.com/herozmy/herobox/internal/logs"
@@ -22,6 +25,17 @@ import (
 )
 
 var mosdnsBinaryPaths []string
+
+const (
+	defaultConfigArchive       = "https://github.com/herozmy/StoreHouse/raw/refs/heads/latest/config/mosdns/jph/mosdns.zip"
+	placeholderMosdnsDir       = "/cus/mosdns"
+	defaultFakeIPRange         = "f2b0::/18"
+	defaultDomesticDNS         = "114.114.114.114"
+	defaultFakeIPNeedle        = "fc00::/18"
+	defaultDnsNeedle           = "202.102.128.68"
+	defaultSocks5Address       = "127.0.0.1:7891"
+	defaultProxyInboundAddress = "127.0.0.1:7874"
+)
 
 func main() {
 	addr := getenv("HEROBOX_ADDR", ":8080")
@@ -66,6 +80,7 @@ func main() {
 	if updater.InstallDir == "" {
 		updater.InstallDir = filepath.Join(".", "bin")
 	}
+	configArchiveURL := getenv("MOSDNS_CONFIG_ARCHIVE", defaultConfigArchive)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/services", func(w http.ResponseWriter, r *http.Request) {
@@ -146,6 +161,95 @@ func main() {
 		}
 	})
 
+	mux.HandleFunc("/api/mosdns/config/download", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			methodNotAllowed(w)
+			return
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Minute)
+		defer cancel()
+		targetDir := resolveConfigDir(configStore.GetConfigPath())
+		if err := downloadAndExtractConfig(ctx, configArchiveURL, targetDir); err != nil {
+			respondErr(w, err)
+			return
+		}
+		placeholderCount, err := rewriteConfigValue(targetDir, placeholderMosdnsDir, targetDir)
+		if err != nil {
+			respondErr(w, err)
+			return
+		}
+		fakeIPRange := resolveFakeIPRange(configStore)
+		domesticDNS := resolveDomesticDNS(configStore)
+		proxyInboundAddress := resolveProxyInboundAddress(configStore)
+		socks5Enabled := resolveSocks5Enabled(configStore)
+		socks5CustomAddr := strings.TrimSpace(resolveSocks5Address(configStore))
+		socks5EffectiveAddr := socks5CustomAddr
+		if socks5EffectiveAddr == "" {
+			socks5EffectiveAddr = defaultSocks5Address
+		}
+		fakeIPNeedle := resolveSetting(configStore, "fakeIpRangeCurrent", defaultFakeIPNeedle)
+		dnsNeedle := resolveSetting(configStore, "domesticDnsCurrent", defaultDnsNeedle)
+		proxyAddrNeedle := resolveSetting(configStore, "proxyInboundAddressCurrent", defaultProxyInboundAddress)
+		socksAddrNeedle := resolveSetting(configStore, "socks5AddressCurrent", defaultSocks5Address)
+		fakeIPCount, err := rewriteWithFallback(targetDir, fakeIPNeedle, defaultFakeIPNeedle, fakeIPRange)
+		if err != nil {
+			respondErr(w, err)
+			return
+		}
+		dnsCount, err := rewriteWithFallback(targetDir, dnsNeedle, defaultDnsNeedle, domesticDNS)
+		if err != nil {
+			respondErr(w, err)
+			return
+		}
+		proxyAddrCount, err := rewriteWithFallback(targetDir, proxyAddrNeedle, defaultProxyInboundAddress, proxyInboundAddress)
+		if err != nil {
+			respondErr(w, err)
+			return
+		}
+		socksAddrCount, err := rewriteWithFallback(targetDir, socksAddrNeedle, defaultSocks5Address, socks5EffectiveAddr)
+		if err != nil {
+			respondErr(w, err)
+			return
+		}
+		socks5Count, err := toggleSocks5References(targetDir, socks5Enabled)
+		if err != nil {
+			respondErr(w, err)
+			return
+		}
+		guideSteps := []map[string]any{
+			buildGuideStep("步骤1：同步配置目录", placeholderCount, placeholderMosdnsDir, targetDir),
+			buildGuideStep("步骤2：更新 FakeIP IPv6 段", fakeIPCount, fakeIPNeedle, fakeIPRange),
+			buildGuideStep("步骤3：更新国内 DNS", dnsCount, dnsNeedle, domesticDNS),
+			buildGuideStep("步骤4：更新 Proxy 入站地址", proxyAddrCount, proxyAddrNeedle, proxyInboundAddress),
+			buildGuideStep("步骤5：更新 SOCKS5 地址", socksAddrCount, socksAddrNeedle, socks5EffectiveAddr),
+			buildSocks5GuideStep(socks5Count, socks5Enabled),
+			{
+				"title":   "步骤7：高级向导",
+				"detail":  "功能开发中，敬请期待",
+				"success": false,
+			},
+		}
+		status := buildConfigStatus(configStore.GetConfigPath())
+		status["placeholder"] = placeholderMosdnsDir
+		status["replacement"] = targetDir
+		status["rewritten"] = placeholderCount
+		status["fakeIpRange"] = fakeIPRange
+		status["domesticDns"] = domesticDNS
+		status["proxyInboundAddress"] = proxyInboundAddress
+		status["socks5Enabled"] = socks5Enabled
+		status["socks5Address"] = socks5CustomAddr
+		status["guideSteps"] = guideSteps
+		if err := configStore.UpdateSettings(map[string]string{
+			"fakeIpRangeCurrent":         fakeIPRange,
+			"domesticDnsCurrent":         domesticDNS,
+			"proxyInboundAddressCurrent": proxyInboundAddress,
+			"socks5AddressCurrent":       socks5EffectiveAddr,
+		}); err != nil {
+			log.Printf("update settings failed: %v", err)
+		}
+		respondJSON(w, status)
+	})
+
 	mux.HandleFunc("/api/mosdns/logs", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			methodNotAllowed(w)
@@ -174,6 +278,42 @@ func main() {
 		})
 	})
 
+	mux.HandleFunc("/api/mosdns/config/file", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPut:
+			file := strings.TrimSpace(r.URL.Query().Get("file"))
+			if file == "" {
+				respondErr(w, errors.New("缺少 file 参数"))
+				return
+			}
+			var payload struct {
+				Path    string `json:"path"`
+				Content string `json:"content"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				respondErr(w, fmt.Errorf("无效的请求体: %w", err))
+				return
+			}
+			target := resolveConfigDir(configStore.GetConfigPath())
+			joined, err := safeJoin(target, file)
+			if err != nil {
+				respondErr(w, err)
+				return
+			}
+			if err := os.MkdirAll(filepath.Dir(joined), 0o755); err != nil {
+				respondErr(w, err)
+				return
+			}
+			if err := os.WriteFile(joined, []byte(payload.Content), 0o644); err != nil {
+				respondErr(w, err)
+				return
+			}
+			respondJSON(w, map[string]any{"path": joined, "saved": true})
+		default:
+			methodNotAllowed(w)
+		}
+	})
+
 	mux.HandleFunc("/api/settings", func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:
@@ -187,6 +327,9 @@ func main() {
 			if err := configStore.UpdateSettings(payload); err != nil {
 				respondErr(w, err)
 				return
+			}
+			if err := applyPreferenceSettings(configStore); err != nil {
+				log.Printf("apply settings failed: %v", err)
 			}
 			respondJSON(w, map[string]any{"settings": configStore.Settings()})
 		default:
@@ -520,6 +663,378 @@ func normalizeMosdnsVersion(raw string) string {
 	return trimmed
 }
 
+func downloadAndExtractConfig(ctx context.Context, url, targetDir string) error {
+	if url == "" {
+		return fmt.Errorf("未配置 mosdns 配置下载地址")
+	}
+	if targetDir == "" {
+		targetDir = "."
+	}
+	if err := os.MkdirAll(targetDir, 0o755); err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("配置下载失败：%s", resp.Status)
+	}
+	tempFile, err := os.CreateTemp("", "mosdns-config-*.zip")
+	if err != nil {
+		return err
+	}
+	defer func() {
+		tempFile.Close()
+		os.Remove(tempFile.Name())
+	}()
+	if _, err := io.Copy(tempFile, resp.Body); err != nil {
+		return err
+	}
+	if err := tempFile.Close(); err != nil {
+		return err
+	}
+	return extractConfigZip(tempFile.Name(), targetDir)
+}
+
+func extractConfigZip(src, targetDir string) error {
+	r, err := zip.OpenReader(src)
+	if err != nil {
+		return err
+	}
+	defer r.Close()
+	for _, f := range r.File {
+		name := strings.TrimSpace(f.Name)
+		if name == "" {
+			continue
+		}
+		rel := filepath.Clean(name)
+		if rel == "." {
+			continue
+		}
+		destination, err := safeJoin(targetDir, rel)
+		if err != nil {
+			return err
+		}
+		if f.FileInfo().IsDir() {
+			if err := os.MkdirAll(destination, 0o755); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := os.MkdirAll(filepath.Dir(destination), 0o755); err != nil {
+			return err
+		}
+		srcFile, err := f.Open()
+		if err != nil {
+			return err
+		}
+		out, err := os.OpenFile(destination, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, f.Mode())
+		if err != nil {
+			srcFile.Close()
+			return err
+		}
+		if _, err := io.Copy(out, srcFile); err != nil {
+			out.Close()
+			srcFile.Close()
+			return err
+		}
+		out.Close()
+		srcFile.Close()
+	}
+	return nil
+}
+
+func rewriteConfigValue(baseDir, needle, replacement string) (int, error) {
+	if baseDir == "" || needle == "" || replacement == "" {
+		return 0, nil
+	}
+	needle = strings.TrimSpace(needle)
+	replacement = strings.TrimSpace(replacement)
+	if needle == replacement {
+		return 0, nil
+	}
+	count := 0
+	err := filepath.WalkDir(baseDir, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		if !isAllowedConfigFile(d.Name()) {
+			return nil
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		content := string(data)
+		if !strings.Contains(content, needle) {
+			return nil
+		}
+		updated := strings.ReplaceAll(content, needle, replacement)
+		if updated == content {
+			return nil
+		}
+		mode := os.FileMode(0o644)
+		if info, err := d.Info(); err == nil {
+			mode = info.Mode()
+		}
+		if err := os.WriteFile(path, []byte(updated), mode); err != nil {
+			return err
+		}
+		count++
+		return nil
+	})
+	return count, err
+}
+
+func buildGuideStep(title string, count int, from, to string) map[string]any {
+	success := count > 0
+	detail := fmt.Sprintf("未在配置中检测到 %s", from)
+	if success {
+		detail = fmt.Sprintf("已在 %d 个文件中将 %s 替换为 %s", count, from, to)
+	}
+	return map[string]any{
+		"title":   title,
+		"detail":  detail,
+		"success": success,
+	}
+}
+
+func buildSocks5GuideStep(count int, enabled bool) map[string]any {
+	var detail string
+	success := true
+	if enabled {
+		if count > 0 {
+			detail = fmt.Sprintf("已启用 %d 处 SOCKS5 配置", count)
+		} else {
+			detail = "未找到可启用的 SOCKS5 配置"
+			success = false
+		}
+	} else {
+		if count > 0 {
+			detail = fmt.Sprintf("已注释 %d 处 SOCKS5 配置", count)
+		} else {
+			detail = "未检测到需要注释的 SOCKS5 配置"
+		}
+	}
+	return map[string]any{
+		"title":   "步骤4：SOCKS5 代理",
+		"detail":  detail,
+		"success": success,
+	}
+}
+
+func resolveFakeIPRange(store *config.Store) string {
+	return resolveSetting(store, "fakeIpRange", defaultFakeIPRange)
+}
+
+func resolveDomesticDNS(store *config.Store) string {
+	return resolveSetting(store, "domesticDns", defaultDomesticDNS)
+}
+
+func resolveProxyInboundAddress(store *config.Store) string {
+	return resolveSetting(store, "proxyInboundAddress", defaultProxyInboundAddress)
+}
+
+func resolveSocks5Enabled(store *config.Store) bool {
+	addr := strings.TrimSpace(resolveSocks5Address(store))
+	return addr != ""
+}
+
+func resolveSocks5Address(store *config.Store) string {
+	if store == nil {
+		return defaultSocks5Address
+	}
+	settings := store.Settings()
+	if val, ok := settings["socks5Address"]; ok {
+		return strings.TrimSpace(val)
+	}
+	return defaultSocks5Address
+}
+
+func applyPreferenceSettings(store *config.Store) error {
+	if store == nil {
+		return nil
+	}
+	dir := resolveConfigDir(store.GetConfigPath())
+	if dir == "" {
+		return nil
+	}
+	fakeNeedle := resolveSetting(store, "fakeIpRangeCurrent", defaultFakeIPNeedle)
+	fakeTarget := resolveFakeIPRange(store)
+	if _, err := rewriteWithFallback(dir, fakeNeedle, defaultFakeIPNeedle, fakeTarget); err != nil {
+		return err
+	}
+	dnsNeedle := resolveSetting(store, "domesticDnsCurrent", defaultDnsNeedle)
+	dnsTarget := resolveDomesticDNS(store)
+	if _, err := rewriteWithFallback(dir, dnsNeedle, defaultDnsNeedle, dnsTarget); err != nil {
+		return err
+	}
+	proxyNeedle := resolveSetting(store, "proxyInboundAddressCurrent", defaultProxyInboundAddress)
+	proxyTarget := resolveProxyInboundAddress(store)
+	if _, err := rewriteWithFallback(dir, proxyNeedle, defaultProxyInboundAddress, proxyTarget); err != nil {
+		return err
+	}
+	socksNeedle := resolveSetting(store, "socks5AddressCurrent", defaultSocks5Address)
+	socksCustom := strings.TrimSpace(resolveSocks5Address(store))
+	socksEffective := socksCustom
+	if socksEffective == "" {
+		socksEffective = defaultSocks5Address
+	}
+	if _, err := rewriteWithFallback(dir, socksNeedle, defaultSocks5Address, socksEffective); err != nil {
+		return err
+	}
+	if _, err := toggleSocks5References(dir, resolveSocks5Enabled(store)); err != nil {
+		return err
+	}
+	_ = store.UpdateSettings(map[string]string{
+		"fakeIpRangeCurrent":         fakeTarget,
+		"domesticDnsCurrent":         dnsTarget,
+		"proxyInboundAddressCurrent": proxyTarget,
+		"socks5AddressCurrent":       socksEffective,
+	})
+	return nil
+}
+
+func rewriteWithFallback(dir, primaryNeedle, fallbackNeedle, target string) (int, error) {
+	count, err := rewriteConfigValue(dir, primaryNeedle, target)
+	if err != nil {
+		return 0, err
+	}
+	if count == 0 && fallbackNeedle != "" && fallbackNeedle != primaryNeedle {
+		return rewriteConfigValue(dir, fallbackNeedle, target)
+	}
+	return count, nil
+}
+
+func resolveSetting(store *config.Store, key, fallback string) string {
+	if store == nil {
+		return fallback
+	}
+	settings := store.Settings()
+	if val, ok := settings[key]; ok {
+		if trimmed := strings.TrimSpace(val); trimmed != "" {
+			return trimmed
+		}
+	}
+	return fallback
+}
+
+func resolveBoolSetting(store *config.Store, key string, fallback bool) bool {
+	if store == nil {
+		return fallback
+	}
+	settings := store.Settings()
+	val, ok := settings[key]
+	if !ok {
+		return fallback
+	}
+	switch strings.ToLower(strings.TrimSpace(val)) {
+	case "1", "true", "yes", "on":
+		return true
+	case "0", "false", "no", "off":
+		return false
+	default:
+		return fallback
+	}
+}
+
+func toggleSocks5References(baseDir string, enable bool) (int, error) {
+	if baseDir == "" {
+		return 0, nil
+	}
+	count := 0
+	err := filepath.WalkDir(baseDir, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		if !isAllowedConfigFile(d.Name()) {
+			return nil
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		lines := strings.Split(string(data), "\n")
+		changed := false
+		for i, line := range lines {
+			updated, toggled := adjustSocks5Line(line, enable)
+			if toggled {
+				lines[i] = updated
+				count++
+				changed = true
+			}
+		}
+		if changed {
+			mode := os.FileMode(0o644)
+			if info, err := d.Info(); err == nil {
+				mode = info.Mode()
+			}
+			content := strings.Join(lines, "\n")
+			if len(lines) > 0 && strings.HasSuffix(string(data), "\n") {
+				content += "\n"
+			}
+			if err := os.WriteFile(path, []byte(content), mode); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	return count, err
+}
+
+func adjustSocks5Line(line string, enable bool) (string, bool) {
+	lower := strings.ToLower(line)
+	if !strings.Contains(lower, "socks5") {
+		return line, false
+	}
+	idx := firstNonSpaceIndex(line)
+	if idx == -1 {
+		return line, false
+	}
+	prefix := line[:idx]
+	body := line[idx:]
+	trimmed := strings.TrimLeft(body, " \t")
+	if trimmed == "" {
+		return line, false
+	}
+	trimmedLower := strings.ToLower(trimmed)
+	if !strings.Contains(trimmedLower, "socks5") {
+		return line, false
+	}
+	if enable {
+		if strings.HasPrefix(trimmed, "#") {
+			un := strings.TrimLeft(trimmed[1:], " \t")
+			return prefix + un, true
+		}
+		return line, false
+	}
+	if strings.HasPrefix(trimmed, "#") {
+		return line, false
+	}
+	return prefix + "# " + body, true
+}
+
+func firstNonSpaceIndex(s string) int {
+	for i, r := range s {
+		if !unicode.IsSpace(r) {
+			return i
+		}
+	}
+	return -1
+}
+
 type configFile struct {
 	Name     string       `json:"name"`
 	Path     string       `json:"path"`
@@ -649,7 +1164,11 @@ func safeJoin(base, rel string) (string, error) {
 
 func isAllowedConfigFile(name string) bool {
 	lower := strings.ToLower(name)
-	return strings.HasSuffix(lower, ".yaml") || strings.HasSuffix(lower, ".yml") || strings.HasSuffix(lower, ".txt")
+	return strings.HasSuffix(lower, ".yaml") ||
+		strings.HasSuffix(lower, ".yml") ||
+		strings.HasSuffix(lower, ".txt") ||
+		strings.HasSuffix(lower, ".conf") ||
+		strings.HasSuffix(lower, ".cfg")
 }
 
 func newMosdnsHooks(store *config.Store) service.ServiceHooks {

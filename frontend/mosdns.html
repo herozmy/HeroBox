@@ -71,6 +71,106 @@
           </div>
         </div>
 
+        <div v-if="downloadConfirmOpen" class="modal-backdrop" @click.self="cancelDownloadConfirm">
+          <div class="modal">
+            <div class="modal__header">
+              <h3>使用默认设置？</h3>
+              <button class="alert__close" @click="cancelDownloadConfirm">×</button>
+            </div>
+            <p class="muted">当前 FakeIP/国内 DNS/SOCKS5 仍为默认值，下载配置时可能需要手动调整。</p>
+            <p>如需立即修改，请点击“去修改”；若确认继续，将按当前设置写入配置。</p>
+            <div class="button-row modal__actions">
+              <button class="btn" @click="modifyPreferencesInstead">去修改</button>
+              <button class="btn primary" @click="proceedDownloadWithDefaults">继续下载</button>
+            </div>
+          </div>
+        </div>
+
+        <div v-if="guideLogModalOpen" class="modal-backdrop" @click.self="closeGuideLog">
+          <div class="modal modal--logs">
+            <div class="modal__header">
+              <h3>向导日志</h3>
+              <button class="alert__close" @click="closeGuideLog">×</button>
+            </div>
+            <div class="guide-log" v-if="hasGuideHistory">
+              <div class="guide-log__entry" v-for="entry in guideHistory" :key="entry.ts">
+                <h4>{{ formatTime(entry.ts) }}</h4>
+                <ul class="guide-card__list">
+                  <li v-for="(step, idx) in entry.steps" :key="idx" class="guide-step">
+                    <span class="guide-step__status" :class="step.success ? 'success' : 'pending'">
+                      {{ step.success ? '✓' : '…' }}
+                    </span>
+                    <div class="guide-step__content">
+                      <strong>{{ step.title }}</strong>
+                      <p>{{ step.detail }}</p>
+                    </div>
+                  </li>
+                </ul>
+              </div>
+            </div>
+            <p class="muted" v-else>暂无历史记录。</p>
+            <div class="button-row modal__actions">
+              <button class="btn primary" @click="closeGuideLog">关闭</button>
+            </div>
+          </div>
+        </div>
+
+        <div v-if="preferencesModalOpen" class="modal-backdrop" @click.self="closePreferencesModal">
+          <div class="modal">
+            <div class="modal__header">
+              <h3>自定义设置</h3>
+              <button class="alert__close" @click="closePreferencesModal">×</button>
+            </div>
+            <p class="muted">填写 FakeIP IPv6 段与国内 DNS，下载配置时会自动替换相应字段。</p>
+            <div class="config-preferences">
+              <div class="config-preferences__row">
+                <label>FakeIP IPv6 段</label>
+                <input
+                  type="text"
+                  v-model="preferencesDraft.fakeIpRange"
+                  placeholder="例如 f2b0::/18"
+                />
+              </div>
+              <div class="config-preferences__row">
+                <label>国内 DNS</label>
+                <input
+                  type="text"
+                  v-model="preferencesDraft.domesticDns"
+                  placeholder="例如 114.114.114.114"
+                />
+              </div>
+              <div class="config-preferences__row">
+                <label>SOCKS5 地址</label>
+                <input
+                  type="text"
+                  v-model="preferencesDraft.socks5Address"
+                  placeholder="127.0.0.1:7891"
+                />
+                <span class="muted">填写 SOCKS5 地址后将自动启用相关规则，留空则视为关闭。</span>
+              </div>
+              <div class="config-preferences__row">
+                <label>Proxy 入站地址</label>
+                <input
+                  type="text"
+                  v-model="preferencesDraft.proxyInboundAddress"
+                  placeholder="127.0.0.1:7874"
+                />
+                <span class="muted">将替换配置中的 Proxy 入站监听地址，默认 127.0.0.1:7874。</span>
+              </div>
+            </div>
+            <div class="button-row modal__actions">
+              <button class="btn" @click="closePreferencesModal">取消</button>
+              <button class="btn primary" @click="savePreferencesFromModal" :disabled="settingsSaving">
+                {{ settingsSaving ? '保存中…' : '保存' }}
+              </button>
+            </div>
+            <div class="progress" v-if="settingsSaveProgress > 0">
+              <div class="progress__inner" :style="{ width: settingsSaveProgress + '%' }"></div>
+            </div>
+            <p class="muted" v-if="settingsSaving || settingsSaveProgress > 0">正在写入配置偏好，请稍候…</p>
+          </div>
+        </div>
+
         <div v-if="previewModalOpen" class="modal-backdrop" @click.self="closePreviewModal">
           <div class="modal modal--logs">
             <div class="modal__header">
@@ -95,13 +195,21 @@
                   <span>{{ node.name }}</span>
                 </button>
               </div>
-              <textarea
-                class="modal__textarea"
-                :value="previewDisplayedContent"
-                @input="handlePreviewInput"
-                :readonly="!previewActiveFile"
-                placeholder="选择左侧的配置文件以查看和编辑"
-              ></textarea>
+              <div class="preview-editor">
+                <textarea
+                  class="modal__textarea"
+                  :value="previewDisplayedContent"
+                  @input="handlePreviewInput"
+                  :readonly="!previewActiveFile"
+                  placeholder="选择左侧的配置文件以查看和编辑"
+                ></textarea>
+                <div class="progress" v-if="previewSaveProgress > 0">
+                  <div class="progress__inner" :style="{ width: previewSaveProgress + '%' }"></div>
+                </div>
+                <p class="muted" v-if="previewSaving || previewSaveProgress > 0">
+                  正在写入配置，请稍候…
+                </p>
+              </div>
             </div>
             <p class="muted" v-else>目录为空或无可预览的配置文件。</p>
             <p class="muted" v-if="previewError">{{ previewError }}</p>
@@ -122,7 +230,6 @@
             <div class="muted">基础信息</div>
             <h1>Mosdns</h1>
           </div>
-          <button class="btn soft" @click="traceAction">记录操作</button>
         </header>
 
         <div v-if="banner" class="alert" :class="`alert--${banner.type}`">
@@ -140,6 +247,24 @@
               </div>
               <div class="muted">最近更新：{{ mosdns.lastUpdated }}</div>
               <div class="muted" v-if="isMissing">未检测到 mosdns 核心，请先更新/安装内核。</div>
+              <ul class="status-meta">
+                <li>
+                  <span class="status-meta__label">当前配置</span>
+                  <span class="status-meta__value" :title="config.path">{{ config.path }}</span>
+                </li>
+                <li>
+                  <span class="status-meta__label">配置状态</span>
+                  <span class="status-meta__value">{{ config.exists ? '已就绪' : '缺失' }}</span>
+                </li>
+                <li>
+                  <span class="status-meta__label">日志刷新</span>
+                  <span class="status-meta__value">{{ uiSettings.autoRefreshLogs ? '自动' : '手动' }}</span>
+                </li>
+                <li>
+                  <span class="status-meta__label">上次同步</span>
+                  <span class="status-meta__value">{{ config.lastSynced }}</span>
+                </li>
+              </ul>
               <div class="button-row">
                 <button
                   class="btn primary"
@@ -173,7 +298,6 @@
                 <h2>配置管理</h2>
                 <div class="card__actions">
                   <button class="btn" @click="openLogsModal">查看日志</button>
-                  <button class="btn" @click="openConfigEditor">修改路径</button>
                 </div>
               </div>
               <p class="muted">当前配置：{{ config.path }}</p>
@@ -188,28 +312,49 @@
                 </label>
                 <span class="muted">{{ uiSettings.autoRefreshLogs ? '日志将在后台自动刷新' : '关闭自动刷新以减少请求' }}</span>
               </div>
+            <div class="button-row">
+              <button class="btn" @click="previewConfig">配置编辑</button>
+              <button
+                class="btn primary"
+                @click="handleDownloadConfig"
+                :disabled="configDownloading"
+                >{{ configDownloading ? '下载中…' : (config.exists ? '重新下载' : '下载配置') }}</button>
+                <button
+                  class="btn"
+                  v-if="hasGuideHistory"
+                  @click="openGuideLog"
+                >向导日志</button>
+              </div>
+              <div class="progress" v-if="configDownloading">
+                <div class="progress__inner" :style="{ width: configDownloadProgress + '%' }"></div>
+              </div>
+              <p class="muted" v-if="configDownloading">下载进度：{{ Math.min(100, Math.round(configDownloadProgress)) }}%</p>
+              <p class="muted" v-if="hasGuideHistory">
+                最新向导结果已记录，可通过“向导日志”查看详细步骤。
+              </p>
+            </article>
+
+            <article class="card">
+              <h2>自定义设置</h2>
+              <p class="muted">FakeIP IPv6 段：{{ settingsForm.fakeIpRange }}</p>
+              <p class="muted">国内 DNS：{{ settingsForm.domesticDns }}</p>
+              <p class="muted">SOCKS5 代理：{{ settingsForm.enableSocks5 ? '启用' : '关闭' }}</p>
+              <p class="muted">SOCKS5 地址：{{ settingsForm.socks5Address || '未设置' }}</p>
+              <p class="muted">Proxy 入站地址：{{ settingsForm.proxyInboundAddress }}</p>
+              <p class="muted" v-if="usingDefaultPreferences">当前仍为默认值，下载前建议调整。</p>
               <div class="button-row">
-                <button class="btn" @click="previewConfig">预览</button>
-                <button class="btn" @click="syncConfig">同步</button>
-                <button
-                  class="btn primary"
-                  v-if="!config.exists"
-                  @click="downloadConfig"
-                >下载配置</button>
-                <button
-                  class="btn primary"
-                  v-else
-                  @click="editConfig"
-                >编辑</button>
+                <button class="btn" @click="openConfigEditor">修改路径</button>
+                <button class="btn primary" @click="openPreferencesModal">编辑设置</button>
               </div>
             </article>
+
           </div>
         </section>
 
       </main>
     </div>
 
-    <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+    <script src="./vue.global.prod.js"></script>
     <script src="./mosdns.js"></script>
   </body>
 </html>

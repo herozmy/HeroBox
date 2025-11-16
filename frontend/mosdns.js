@@ -1,5 +1,10 @@
-const { createApp } = Vue;
+const createApp = Vue.createApp;
 const LATEST_VERSION_CACHE_KEY = 'herobox.mosdns.latestVersion';
+const DEFAULT_FAKEIP_RANGE = 'f2b0::/18';
+const DEFAULT_DOMESTIC_DNS = '114.114.114.114';
+const DEFAULT_SOCKS5_ENABLED = true;
+const DEFAULT_SOCKS5_ADDRESS = '127.0.0.1:7891';
+const DEFAULT_PROXY_INBOUND = '127.0.0.1:7874';
 
 document.addEventListener('DOMContentLoaded', () => {
   createApp({
@@ -21,6 +26,13 @@ document.addEventListener('DOMContentLoaded', () => {
         logsEntries: [],
         uiSettings: {
           autoRefreshLogs: true,
+        },
+        settingsForm: {
+          fakeIpRange: DEFAULT_FAKEIP_RANGE,
+          domesticDns: DEFAULT_DOMESTIC_DNS,
+          enableSocks5: DEFAULT_SOCKS5_ENABLED,
+          socks5Address: DEFAULT_SOCKS5_ADDRESS,
+          proxyInboundAddress: DEFAULT_PROXY_INBOUND,
         },
         banner: null,
         actionPending: false,
@@ -46,6 +58,23 @@ document.addEventListener('DOMContentLoaded', () => {
         previewLoading: false,
         previewError: '',
         previewSaving: false,
+        previewSaveProgress: 0,
+        previewSaveTimer: null,
+        configDownloading: false,
+        configDownloadProgress: 0,
+        configDownloadTimer: null,
+        downloadConfirmOpen: false,
+        guideHistory: [],
+        guideLogModalOpen: false,
+        preferencesModalOpen: false,
+        preferencesDraft: {
+          fakeIpRange: DEFAULT_FAKEIP_RANGE,
+          domesticDns: DEFAULT_DOMESTIC_DNS,
+          socks5Address: DEFAULT_SOCKS5_ADDRESS,
+          proxyInboundAddress: DEFAULT_PROXY_INBOUND,
+        },
+        settingsSaveProgress: 0,
+        settingsSaveTimer: null,
       };
     },
     computed: {
@@ -97,6 +126,17 @@ document.addEventListener('DOMContentLoaded', () => {
           return parts.join('/') || '/';
         }
         return '未知目录';
+      },
+      usingDefaultPreferences() {
+        const fakeDefault = (this.settingsForm.fakeIpRange || '').trim() === DEFAULT_FAKEIP_RANGE;
+        const dnsDefault = (this.settingsForm.domesticDns || '').trim() === DEFAULT_DOMESTIC_DNS;
+        const addrDefault = (this.settingsForm.socks5Address || '').trim() === DEFAULT_SOCKS5_ADDRESS;
+        const proxyDefault =
+          (this.settingsForm.proxyInboundAddress || '').trim() === DEFAULT_PROXY_INBOUND;
+        return fakeDefault && dnsDefault && addrDefault && proxyDefault;
+      },
+      hasGuideHistory() {
+        return Array.isArray(this.guideHistory) && this.guideHistory.length > 0;
       },
     },
     methods: {
@@ -191,6 +231,27 @@ document.addEventListener('DOMContentLoaded', () => {
           );
         }
         this.uiSettings = normalized;
+        const nextForm = { ...this.settingsForm };
+        if (Object.prototype.hasOwnProperty.call(serverSettings, 'fakeIpRange')) {
+          const value = (serverSettings.fakeIpRange || '').trim();
+          nextForm.fakeIpRange = value || DEFAULT_FAKEIP_RANGE;
+        }
+        if (Object.prototype.hasOwnProperty.call(serverSettings, 'domesticDns')) {
+          const value = (serverSettings.domesticDns || '').trim();
+          nextForm.domesticDns = value || DEFAULT_DOMESTIC_DNS;
+        }
+        if (Object.prototype.hasOwnProperty.call(serverSettings, 'proxyInboundAddress')) {
+          const value = (serverSettings.proxyInboundAddress || '').trim();
+          nextForm.proxyInboundAddress = value || DEFAULT_PROXY_INBOUND;
+        }
+        let socksAddress = DEFAULT_SOCKS5_ADDRESS;
+        if (Object.prototype.hasOwnProperty.call(serverSettings, 'socks5Address')) {
+          socksAddress = (serverSettings.socks5Address || '').trim();
+        }
+        nextForm.socks5Address = socksAddress || '';
+        nextForm.enableSocks5 = Boolean((nextForm.socks5Address || '').trim());
+        this.settingsForm = nextForm;
+        this.preferencesDraft = { ...nextForm };
       },
       applySettings() {
         const enabled = this.normalizeBool(this.uiSettings.autoRefreshLogs, true);
@@ -379,18 +440,107 @@ document.addEventListener('DOMContentLoaded', () => {
         this.openPreviewModal();
         this.loadPreviewContent();
       },
-      syncConfig() {
-        const stamp = new Date();
-        this.config.lastSynced = this.formatTime(stamp);
-        this.touchUpdate('同步配置', stamp);
-        this.setBanner('success', '配置同步完成（示意）');
+      startConfigDownloadTicker() {
+        this.stopConfigDownloadTicker();
+        this.configDownloadProgress = 5;
+        this.configDownloadTimer = setInterval(() => {
+          if (this.configDownloadProgress < 90) {
+            this.configDownloadProgress += 5;
+          }
+        }, 400);
       },
-      editConfig() {
-        this.setBanner('info', '请在本地编辑配置文件后重新同步。');
-        this.touchUpdate('进入配置编辑');
+      stopConfigDownloadTicker(finalProgress = 0) {
+        if (typeof finalProgress === 'number') {
+          this.configDownloadProgress = finalProgress;
+        }
+        if (this.configDownloadTimer) {
+          clearInterval(this.configDownloadTimer);
+          this.configDownloadTimer = null;
+        }
       },
-      downloadConfig() {
-        this.openModal('下载配置', '配置模板即将提供，请稍后在文档中下载最新配置文件。');
+      async performDownloadConfig() {
+        if (this.configDownloading) return;
+        this.configDownloading = true;
+        this.startConfigDownloadTicker();
+        this.setBanner('info', '正在下载官方 mosdns 配置…');
+        try {
+          const status = await this.apiRequest('/api/mosdns/config/download', {
+            method: 'POST',
+          });
+          this.stopConfigDownloadTicker(100);
+          this.setBanner('success', '配置下载完成并已解压');
+          if (status && status.path) {
+            this.openModal('配置下载完成', `mosdns 配置已写入 ${status.path}，可继续编辑或启动服务。`);
+          }
+          const guideSteps = Array.isArray(status?.guideSteps) ? status.guideSteps : [];
+          this.appendGuideHistory(guideSteps);
+          await this.loadConfigStatus();
+        } catch (err) {
+          this.stopConfigDownloadTicker(0);
+          this.setBanner('error', `下载失败：${err.message}`);
+        } finally {
+          setTimeout(() => {
+            this.configDownloading = false;
+            this.configDownloadProgress = 0;
+          }, 600);
+        }
+      },
+      handleDownloadConfig() {
+        if (this.configDownloading) return;
+        if (this.usingDefaultPreferences) {
+          this.downloadConfirmOpen = true;
+          return;
+        }
+        this.performDownloadConfig();
+      },
+      cancelDownloadConfirm() {
+        this.downloadConfirmOpen = false;
+      },
+      proceedDownloadWithDefaults() {
+        this.downloadConfirmOpen = false;
+        this.performDownloadConfig();
+      },
+      modifyPreferencesInstead() {
+        this.downloadConfirmOpen = false;
+        this.openPreferencesModal();
+      },
+      appendGuideHistory(steps) {
+        if (!Array.isArray(steps) || steps.length === 0) {
+          return;
+        }
+        const entry = {
+          ts: Date.now(),
+          steps: steps.map((step) => ({
+            title: step.title,
+            detail: step.detail,
+            success: Boolean(step.success),
+          })),
+        };
+        this.guideHistory = [entry, ...this.guideHistory].slice(0, 10);
+      },
+      openGuideLog() {
+        if (!this.hasGuideHistory) return;
+        this.guideLogModalOpen = true;
+      },
+      closeGuideLog() {
+        this.guideLogModalOpen = false;
+      },
+      openPreferencesModal() {
+        this.preferencesDraft = { ...this.settingsForm };
+        this.preferencesModalOpen = true;
+      },
+      closePreferencesModal() {
+        this.preferencesModalOpen = false;
+      },
+      async savePreferencesFromModal() {
+        const success = await this.saveConfigPreferences(this.preferencesDraft);
+        if (success) {
+          setTimeout(() => {
+            if (this.preferencesModalOpen) {
+              this.closePreferencesModal();
+            }
+          }, 600);
+        }
       },
       openConfigEditor() {
         this.configEditValue = this.config.path || '';
@@ -423,6 +573,68 @@ document.addEventListener('DOMContentLoaded', () => {
       handleAutoRefreshToggle() {
         this.applySettings();
         this.saveSettings({ autoRefreshLogs: this.uiSettings.autoRefreshLogs });
+      },
+      async saveConfigPreferences(values) {
+        const source = values || this.settingsForm;
+        const fakeIp = (source.fakeIpRange || '').trim() || DEFAULT_FAKEIP_RANGE;
+        const dns = (source.domesticDns || '').trim() || DEFAULT_DOMESTIC_DNS;
+        const proxyInboundAddress =
+          (source.proxyInboundAddress || '').trim() || DEFAULT_PROXY_INBOUND;
+        const socks5Address = (source.socks5Address || '').trim();
+        const enableSocks5 = socks5Address !== '';
+        this.settingsForm.fakeIpRange = fakeIp;
+        this.settingsForm.domesticDns = dns;
+        this.settingsForm.enableSocks5 = enableSocks5;
+        this.settingsForm.socks5Address = socks5Address;
+        this.settingsForm.proxyInboundAddress = proxyInboundAddress;
+        this.settingsSaving = true;
+        this.startSettingsSaveTicker();
+        let success = false;
+        try {
+          await this.saveSettings({
+            fakeIpRange: fakeIp,
+            domesticDns: dns,
+            proxyInboundAddress,
+            enableSocks5: enableSocks5,
+            socks5Address: socks5Address,
+          });
+          this.stopSettingsSaveTicker(100);
+          this.preferencesDraft = {
+            fakeIpRange: fakeIp,
+            domesticDns: dns,
+            proxyInboundAddress,
+            socks5Address,
+          };
+          this.setBanner('success', '配置偏好已保存，下一次下载将自动应用。');
+          success = true;
+        } catch (err) {
+          this.stopSettingsSaveTicker(0);
+          this.setBanner('error', `保存偏好失败：${err.message}`);
+        } finally {
+          setTimeout(() => {
+            this.settingsSaveProgress = 0;
+          }, 800);
+          this.settingsSaving = false;
+        }
+        return success;
+      },
+      startSettingsSaveTicker() {
+        this.stopSettingsSaveTicker();
+        this.settingsSaveProgress = 12;
+        this.settingsSaveTimer = setInterval(() => {
+          if (this.settingsSaveProgress < 90) {
+            this.settingsSaveProgress += 6;
+          }
+        }, 220);
+      },
+      stopSettingsSaveTicker(finalProgress = 0) {
+        if (typeof finalProgress === 'number') {
+          this.settingsSaveProgress = finalProgress;
+        }
+        if (this.settingsSaveTimer) {
+          clearInterval(this.settingsSaveTimer);
+          this.settingsSaveTimer = null;
+        }
       },
       openModal(title, message) {
         this.modal = { title: title || '提示', message: message || '' };
@@ -516,6 +728,7 @@ document.addEventListener('DOMContentLoaded', () => {
       async savePreviewFile() {
         if (!this.previewActiveFile) return;
         this.previewSaving = true;
+        this.startPreviewSaveTicker();
         try {
           await this.apiRequest(`/api/mosdns/config/file?file=${encodeURIComponent(this.previewActiveFile)}`, {
             method: 'PUT',
@@ -523,10 +736,15 @@ document.addEventListener('DOMContentLoaded', () => {
           });
           this.updateTreeContent(this.previewActiveFile, this.previewEditingContent);
           this.setBanner('success', `${this.previewActiveFile} 已保存`);
+          this.stopPreviewSaveTicker(100);
         } catch (err) {
+          this.stopPreviewSaveTicker(0);
           this.setBanner('error', `保存失败：${err.message}`);
         } finally {
           this.previewSaving = false;
+          setTimeout(() => {
+            this.previewSaveProgress = 0;
+          }, 800);
         }
       },
       updateTreeContent(path, content) {
@@ -546,6 +764,24 @@ document.addEventListener('DOMContentLoaded', () => {
       },
       reloadPreview() {
         this.loadPreviewContent();
+      },
+      startPreviewSaveTicker() {
+        this.stopPreviewSaveTicker();
+        this.previewSaveProgress = 15;
+        this.previewSaveTimer = setInterval(() => {
+          if (this.previewSaveProgress < 90) {
+            this.previewSaveProgress += 7;
+          }
+        }, 200);
+      },
+      stopPreviewSaveTicker(finalProgress = 0) {
+        if (typeof finalProgress === 'number') {
+          this.previewSaveProgress = finalProgress;
+        }
+        if (this.previewSaveTimer) {
+          clearInterval(this.previewSaveTimer);
+          this.previewSaveTimer = null;
+        }
       },
       traceAction(message) {
         this.touchUpdate(message || '记录操作');
@@ -597,6 +833,11 @@ document.addEventListener('DOMContentLoaded', () => {
     },
     beforeUnmount() {
       this.stopAutoLogRefresh();
+      this.stopConfigDownloadTicker();
+      this.closeGuideLog();
+      this.closePreferencesModal();
+      this.stopSettingsSaveTicker();
+      this.stopPreviewSaveTicker();
     },
   }).mount('#app');
 });
