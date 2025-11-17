@@ -5,6 +5,7 @@ const DEFAULT_DOMESTIC_DNS = '114.114.114.114';
 const DEFAULT_SOCKS5_ENABLED = true;
 const DEFAULT_SOCKS5_ADDRESS = '127.0.0.1:7891';
 const DEFAULT_PROXY_INBOUND = '127.0.0.1:7874';
+const DEFAULT_FORWARD_ECS = '2408:8214:213::1';
 
 document.addEventListener('DOMContentLoaded', () => {
   createApp({
@@ -33,6 +34,7 @@ document.addEventListener('DOMContentLoaded', () => {
           enableSocks5: DEFAULT_SOCKS5_ENABLED,
           socks5Address: DEFAULT_SOCKS5_ADDRESS,
           proxyInboundAddress: DEFAULT_PROXY_INBOUND,
+          forwardEcsAddress: DEFAULT_FORWARD_ECS,
         },
         banner: null,
         actionPending: false,
@@ -67,11 +69,14 @@ document.addEventListener('DOMContentLoaded', () => {
         guideHistory: [],
         guideLogModalOpen: false,
         preferencesModalOpen: false,
+        mosdnsSection: 'overview',
+        mosdnsNavExpanded: false,
         preferencesDraft: {
           fakeIpRange: DEFAULT_FAKEIP_RANGE,
           domesticDns: DEFAULT_DOMESTIC_DNS,
           socks5Address: DEFAULT_SOCKS5_ADDRESS,
           proxyInboundAddress: DEFAULT_PROXY_INBOUND,
+          forwardEcsAddress: DEFAULT_FORWARD_ECS,
         },
         settingsSaveProgress: 0,
         settingsSaveTimer: null,
@@ -133,7 +138,9 @@ document.addEventListener('DOMContentLoaded', () => {
         const addrDefault = (this.settingsForm.socks5Address || '').trim() === DEFAULT_SOCKS5_ADDRESS;
         const proxyDefault =
           (this.settingsForm.proxyInboundAddress || '').trim() === DEFAULT_PROXY_INBOUND;
-        return fakeDefault && dnsDefault && addrDefault && proxyDefault;
+        const forwardDefault =
+          (this.settingsForm.forwardEcsAddress || '').trim() === DEFAULT_FORWARD_ECS;
+        return fakeDefault && dnsDefault && addrDefault && proxyDefault && forwardDefault;
       },
       hasGuideHistory() {
         return Array.isArray(this.guideHistory) && this.guideHistory.length > 0;
@@ -243,6 +250,10 @@ document.addEventListener('DOMContentLoaded', () => {
         if (Object.prototype.hasOwnProperty.call(serverSettings, 'proxyInboundAddress')) {
           const value = (serverSettings.proxyInboundAddress || '').trim();
           nextForm.proxyInboundAddress = value || DEFAULT_PROXY_INBOUND;
+        }
+        if (Object.prototype.hasOwnProperty.call(serverSettings, 'forwardEcsAddress')) {
+          const value = (serverSettings.forwardEcsAddress || '').trim();
+          nextForm.forwardEcsAddress = value || DEFAULT_FORWARD_ECS;
         }
         let socksAddress = DEFAULT_SOCKS5_ADDRESS;
         if (Object.prototype.hasOwnProperty.call(serverSettings, 'socks5Address')) {
@@ -578,12 +589,14 @@ document.addEventListener('DOMContentLoaded', () => {
         const source = values || this.settingsForm;
         const fakeIp = (source.fakeIpRange || '').trim() || DEFAULT_FAKEIP_RANGE;
         const dns = (source.domesticDns || '').trim() || DEFAULT_DOMESTIC_DNS;
+        const forwardEcsAddress = (source.forwardEcsAddress || '').trim() || DEFAULT_FORWARD_ECS;
         const proxyInboundAddress =
           (source.proxyInboundAddress || '').trim() || DEFAULT_PROXY_INBOUND;
         const socks5Address = (source.socks5Address || '').trim();
         const enableSocks5 = socks5Address !== '';
         this.settingsForm.fakeIpRange = fakeIp;
         this.settingsForm.domesticDns = dns;
+        this.settingsForm.forwardEcsAddress = forwardEcsAddress;
         this.settingsForm.enableSocks5 = enableSocks5;
         this.settingsForm.socks5Address = socks5Address;
         this.settingsForm.proxyInboundAddress = proxyInboundAddress;
@@ -594,6 +607,7 @@ document.addEventListener('DOMContentLoaded', () => {
           await this.saveSettings({
             fakeIpRange: fakeIp,
             domesticDns: dns,
+            forwardEcsAddress,
             proxyInboundAddress,
             enableSocks5: enableSocks5,
             socks5Address: socks5Address,
@@ -602,6 +616,7 @@ document.addEventListener('DOMContentLoaded', () => {
           this.preferencesDraft = {
             fakeIpRange: fakeIp,
             domesticDns: dns,
+            forwardEcsAddress,
             proxyInboundAddress,
             socks5Address,
           };
@@ -724,6 +739,13 @@ document.addEventListener('DOMContentLoaded', () => {
       },
       handlePreviewInput(event) {
         this.previewEditingContent = event.target.value;
+      },
+      setMosdnsSection(section) {
+        if (this.mosdnsSection === section) return;
+        this.mosdnsSection = section;
+      },
+      toggleMosdnsNav() {
+        this.mosdnsNavExpanded = !this.mosdnsNavExpanded;
       },
       async savePreviewFile() {
         if (!this.previewActiveFile) return;

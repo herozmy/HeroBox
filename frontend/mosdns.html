@@ -7,16 +7,35 @@
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
-    <div class="layout">
+    <div id="app" class="layout">
       <aside class="sidebar">
         <div class="logo">HeroBox</div>
         <nav>
           <a class="nav-btn" href="./index.html">仪表盘</a>
-          <a class="nav-btn active" href="./mosdns.html">Mosdns</a>
+          <div class="nav-group">
+            <button class="nav-btn nav-btn--parent active" type="button" @click="toggleMosdnsNav">
+              <span>Mosdns</span>
+              <span class="nav-caret">{{ mosdnsNavExpanded ? '▾' : '▸' }}</span>
+            </button>
+            <div class="nav-sub" v-show="mosdnsNavExpanded">
+              <button
+                class="nav-sub__btn"
+                :class="{ active: mosdnsSection === 'overview' }"
+                type="button"
+                @click="setMosdnsSection('overview')"
+              >总览</button>
+              <button
+                class="nav-sub__btn"
+                :class="{ active: mosdnsSection === 'lists' }"
+                type="button"
+                @click="setMosdnsSection('lists')"
+              >名单管理</button>
+            </div>
+          </div>
         </nav>
       </aside>
 
-      <main id="app" class="content">
+      <main class="content">
         <div v-if="modal" class="modal-backdrop" @click.self="closeModal">
           <div class="modal">
             <h3>{{ modal.title }}</h3>
@@ -149,6 +168,15 @@
                 <span class="muted">填写 SOCKS5 地址后将自动启用相关规则，留空则视为关闭。</span>
               </div>
               <div class="config-preferences__row">
+                <label>forward_nocn_ecs IPv6 /64</label>
+                <input
+                  type="text"
+                  v-model="preferencesDraft.forwardEcsAddress"
+                  placeholder="2408:8214:213::1"
+                />
+                <span class="muted">可填公网 IPv6 /64 段或运营商下发的 DNS IP。</span>
+              </div>
+              <div class="config-preferences__row">
                 <label>Proxy 入站地址</label>
                 <input
                   type="text"
@@ -237,7 +265,7 @@
           <button class="alert__close" @click="banner = null">×</button>
         </div>
 
-        <section>
+        <section v-if="mosdnsSection === 'overview'">
           <div class="cards">
             <article class="card">
               <h2>运行状态</h2>
@@ -340,6 +368,7 @@
               <p class="muted">国内 DNS：{{ settingsForm.domesticDns }}</p>
               <p class="muted">SOCKS5 代理：{{ settingsForm.enableSocks5 ? '启用' : '关闭' }}</p>
               <p class="muted">SOCKS5 地址：{{ settingsForm.socks5Address || '未设置' }}</p>
+              <p class="muted">forward_nocn_ecs：{{ settingsForm.forwardEcsAddress }}</p>
               <p class="muted">Proxy 入站地址：{{ settingsForm.proxyInboundAddress }}</p>
               <p class="muted" v-if="usingDefaultPreferences">当前仍为默认值，下载前建议调整。</p>
               <div class="button-row">
@@ -349,6 +378,17 @@
             </article>
 
           </div>
+        </section>
+
+        <section v-else class="cards cards--placeholder">
+          <article class="card">
+            <h2>名单管理</h2>
+            <p class="muted">此处将托管白名单/黑名单等列表，后续版本会加入导入导出、批量编辑功能。</p>
+            <div class="button-row">
+              <button class="btn" disabled>导入名单</button>
+              <button class="btn" disabled>导出名单</button>
+            </div>
+          </article>
         </section>
 
       </main>

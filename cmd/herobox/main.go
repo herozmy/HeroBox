@@ -33,6 +33,7 @@ const (
 	defaultDomesticDNS         = "114.114.114.114"
 	defaultFakeIPNeedle        = "fc00::/18"
 	defaultDnsNeedle           = "202.102.128.68"
+	defaultForwardEcsAddress   = "2408:8214:213::1"
 	defaultSocks5Address       = "127.0.0.1:7891"
 	defaultProxyInboundAddress = "127.0.0.1:7874"
 )
@@ -180,6 +181,7 @@ func main() {
 		}
 		fakeIPRange := resolveFakeIPRange(configStore)
 		domesticDNS := resolveDomesticDNS(configStore)
+		forwardEcsAddress := resolveForwardEcsAddress(configStore)
 		proxyInboundAddress := resolveProxyInboundAddress(configStore)
 		socks5Enabled := resolveSocks5Enabled(configStore)
 		socks5CustomAddr := strings.TrimSpace(resolveSocks5Address(configStore))
@@ -189,6 +191,7 @@ func main() {
 		}
 		fakeIPNeedle := resolveSetting(configStore, "fakeIpRangeCurrent", defaultFakeIPNeedle)
 		dnsNeedle := resolveSetting(configStore, "domesticDnsCurrent", defaultDnsNeedle)
+		forwardEcsNeedle := resolveSetting(configStore, "forwardEcsAddressCurrent", defaultForwardEcsAddress)
 		proxyAddrNeedle := resolveSetting(configStore, "proxyInboundAddressCurrent", defaultProxyInboundAddress)
 		socksAddrNeedle := resolveSetting(configStore, "socks5AddressCurrent", defaultSocks5Address)
 		fakeIPCount, err := rewriteWithFallback(targetDir, fakeIPNeedle, defaultFakeIPNeedle, fakeIPRange)
@@ -197,6 +200,11 @@ func main() {
 			return
 		}
 		dnsCount, err := rewriteWithFallback(targetDir, dnsNeedle, defaultDnsNeedle, domesticDNS)
+		if err != nil {
+			respondErr(w, err)
+			return
+		}
+		forwardEcsCount, err := rewriteWithFallback(targetDir, forwardEcsNeedle, defaultForwardEcsAddress, forwardEcsAddress)
 		if err != nil {
 			respondErr(w, err)
 			return
@@ -220,11 +228,12 @@ func main() {
 			buildGuideStep("步骤1：同步配置目录", placeholderCount, placeholderMosdnsDir, targetDir),
 			buildGuideStep("步骤2：更新 FakeIP IPv6 段", fakeIPCount, fakeIPNeedle, fakeIPRange),
 			buildGuideStep("步骤3：更新国内 DNS", dnsCount, dnsNeedle, domesticDNS),
-			buildGuideStep("步骤4：更新 Proxy 入站地址", proxyAddrCount, proxyAddrNeedle, proxyInboundAddress),
-			buildGuideStep("步骤5：更新 SOCKS5 地址", socksAddrCount, socksAddrNeedle, socks5EffectiveAddr),
+			buildGuideStep("步骤4：更新 forward_nocn_ecs 地址", forwardEcsCount, forwardEcsNeedle, forwardEcsAddress),
+			buildGuideStep("步骤5：更新 Proxy 入站地址", proxyAddrCount, proxyAddrNeedle, proxyInboundAddress),
+			buildGuideStep("步骤6：更新 SOCKS5 地址", socksAddrCount, socksAddrNeedle, socks5EffectiveAddr),
 			buildSocks5GuideStep(socks5Count, socks5Enabled),
 			{
-				"title":   "步骤7：高级向导",
+				"title":   "步骤8：高级向导",
 				"detail":  "功能开发中，敬请期待",
 				"success": false,
 			},
@@ -235,6 +244,7 @@ func main() {
 		status["rewritten"] = placeholderCount
 		status["fakeIpRange"] = fakeIPRange
 		status["domesticDns"] = domesticDNS
+		status["forwardEcsAddress"] = forwardEcsAddress
 		status["proxyInboundAddress"] = proxyInboundAddress
 		status["socks5Enabled"] = socks5Enabled
 		status["socks5Address"] = socks5CustomAddr
@@ -242,6 +252,7 @@ func main() {
 		if err := configStore.UpdateSettings(map[string]string{
 			"fakeIpRangeCurrent":         fakeIPRange,
 			"domesticDnsCurrent":         domesticDNS,
+			"forwardEcsAddressCurrent":   forwardEcsAddress,
 			"proxyInboundAddressCurrent": proxyInboundAddress,
 			"socks5AddressCurrent":       socks5EffectiveAddr,
 		}); err != nil {
@@ -840,6 +851,10 @@ func resolveDomesticDNS(store *config.Store) string {
 	return resolveSetting(store, "domesticDns", defaultDomesticDNS)
 }
 
+func resolveForwardEcsAddress(store *config.Store) string {
+	return resolveSetting(store, "forwardEcsAddress", defaultForwardEcsAddress)
+}
+
 func resolveProxyInboundAddress(store *config.Store) string {
 	return resolveSetting(store, "proxyInboundAddress", defaultProxyInboundAddress)
 }
@@ -878,6 +893,11 @@ func applyPreferenceSettings(store *config.Store) error {
 	if _, err := rewriteWithFallback(dir, dnsNeedle, defaultDnsNeedle, dnsTarget); err != nil {
 		return err
 	}
+	forwardNeedle := resolveSetting(store, "forwardEcsAddressCurrent", defaultForwardEcsAddress)
+	forwardTarget := resolveForwardEcsAddress(store)
+	if _, err := rewriteWithFallback(dir, forwardNeedle, defaultForwardEcsAddress, forwardTarget); err != nil {
+		return err
+	}
 	proxyNeedle := resolveSetting(store, "proxyInboundAddressCurrent", defaultProxyInboundAddress)
 	proxyTarget := resolveProxyInboundAddress(store)
 	if _, err := rewriteWithFallback(dir, proxyNeedle, defaultProxyInboundAddress, proxyTarget); err != nil {
@@ -898,6 +918,7 @@ func applyPreferenceSettings(store *config.Store) error {
 	_ = store.UpdateSettings(map[string]string{
 		"fakeIpRangeCurrent":         fakeTarget,
 		"domesticDnsCurrent":         dnsTarget,
+		"forwardEcsAddressCurrent":   forwardTarget,
 		"proxyInboundAddressCurrent": proxyTarget,
 		"socks5AddressCurrent":       socksEffective,
 	})

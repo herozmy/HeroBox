@@ -78,6 +78,47 @@ body {
   font-size: 26px;
 }
 
+.nav-group {
+  margin-top: 16px;
+}
+
+.nav-btn--parent {
+  cursor: default;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.nav-caret {
+  font-size: 12px;
+  opacity: 0.8;
+}
+
+.nav-sub {
+  margin: 12px 0 24px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.nav-sub__btn {
+  border: none;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.7);
+  text-align: left;
+  padding: 8px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.2s ease;
+}
+
+.nav-sub__btn.active,
+.nav-sub__btn:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+}
+
 .empty-state {
   border: 1px dashed var(--border);
   border-radius: 12px;
@@ -109,6 +150,13 @@ body {
 .card h2 {
   font-size: 18px;
   margin-bottom: 16px;
+}
+
+.cards--placeholder .card {
+  align-items: flex-start;
+  justify-content: center;
+  gap: 12px;
+  min-height: 200px;
 }
 
 .card__header {
