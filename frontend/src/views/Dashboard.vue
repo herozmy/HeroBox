@@ -8,7 +8,6 @@
       <div class="muted">基础信息</div>
       <h1>仪表盘</h1>
     </div>
-    <button class="btn soft" disabled>记录操作</button>
   </header>
 
   <section>
