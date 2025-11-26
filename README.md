@@ -26,6 +26,27 @@ MYBOX_ADDR=:8080 ./mybox
 
 打开浏览器访问 `http://localhost:8080`，左侧菜单可切换到 “Mosdns” 页面查看实时状态。
 
+## 前端开发
+
+前端目录已经迁移到 **Vite + Vue 3**，首次开发需要安装依赖：
+
+```bash
+cd frontend
+npm install
+npm run dev   # 启动本地调试，默认监听 5173 端口
+```
+
+所有页面与组件都位于 `frontend/src` 下，其中：
+
+| 目录                      | 说明 |
+|---------------------------|------|
+| `src/views/Dashboard.vue` | 总览页面占位，展示系统状态。 |
+| `src/views/Mosdns`        | Mosdns 相关的 Overview、ListManagement 等模块。 |
+| `src/components`          | 公共组件（弹窗、进度条、提示条等）。 |
+| `src/api.js`              | 与后端交互的 API 封装，列表接口返回纯文本也会被自动解析。 |
+
+前端改动完成后，仍需回到仓库根目录执行 `./scripts/build.sh`，以便生产构建结果复制到 `bin/dist/`，确保与后端一同发布。
+
 ## 关键路径
 
 | 类型    | 位置                                  |

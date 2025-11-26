@@ -1,6 +1,6 @@
 <script setup>
 import { ref, reactive, computed, onMounted, onUnmounted, watch, provide, inject } from 'vue';
-import { useRoute } from 'vue-router';
+import { useRoute, useRouter } from 'vue-router';
 import {
   apiRequest,
   getServiceStatus,
@@ -43,13 +43,41 @@ import MosdnsOverview from './MosdnsOverview.vue';
 import MosdnsListManagement from './MosdnsListManagement.vue';
 
 const route = useRoute();
+const router = useRouter();
 const setBanner = inject('setBanner');
 
 // --- Mosdns Section State ---
 const mosdnsSection = ref('overview'); // 'overview' or 'lists'
-watch(() => route.query.section, (newSection) => {
-  mosdnsSection.value = newSection || 'overview';
-}, { immediate: true });
+
+const canAccessLists = computed(() => mosdns.status === 'running');
+
+const enforceSectionAccess = (targetSection, triggerRedirect = false) => {
+  if (targetSection === 'lists' && !canAccessLists.value) {
+    if (triggerRedirect) {
+      setBanner('error', 'mosdns 未运行，名单管理不可用');
+      router.replace({ path: '/mosdns', query: { section: 'overview' } }).catch(() => {});
+    }
+    return 'overview';
+  }
+  return targetSection;
+};
+
+watch(
+  () => route.query.section,
+  (newSection) => {
+    const target = enforceSectionAccess(newSection || 'overview', true);
+    mosdnsSection.value = target;
+  },
+  { immediate: true },
+);
+
+watch(canAccessLists, (ready) => {
+  if (!ready && mosdnsSection.value === 'lists') {
+    mosdnsSection.value = 'overview';
+    router.replace({ path: '/mosdns', query: { section: 'overview' } }).catch(() => {});
+    setBanner('error', 'mosdns 未运行，名单管理不可用');
+  }
+});
 
 // --- Global Modals State ---
 const showInfoModal = reactive({
