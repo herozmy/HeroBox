@@ -7,6 +7,82 @@ const DEFAULT_SOCKS5_ADDRESS = '127.0.0.1:7891';
 const DEFAULT_PROXY_INBOUND = '127.0.0.1:7874';
 const DEFAULT_FORWARD_ECS = '2408:8214:213::1';
 
+const SETTINGS_FIELDS = Object.freeze({
+  fakeIpRange: DEFAULT_FAKEIP_RANGE,
+  domesticDns: DEFAULT_DOMESTIC_DNS,
+  socks5Address: DEFAULT_SOCKS5_ADDRESS,
+  proxyInboundAddress: DEFAULT_PROXY_INBOUND,
+  forwardEcsAddress: DEFAULT_FORWARD_ECS,
+});
+
+const createSettingsState = (overrides = {}) => ({
+  ...SETTINGS_FIELDS,
+  enableSocks5: DEFAULT_SOCKS5_ENABLED,
+  ...overrides,
+});
+
+const MOSDNS_API_ENDPOINTS = Object.freeze([
+  {
+    label: '最新发布 API',
+    url: 'https://api.github.com/repos/yyysuo/mosdns/releases/latest',
+  },
+  {
+    label: '指定版本 API',
+    url: 'https://api.github.com/repos/yyysuo/mosdns/releases/tags/v5-ph-srs',
+  },
+  {
+    label: '发布页面',
+    url: 'https://github.com/yyysuo/mosdns/releases/tag/v5-ph-srs',
+  },
+  {
+    label: '资源清单页',
+    url: 'https://github.com/yyysuo/mosdns/releases/expanded_assets/v5-ph-srs',
+  },
+  {
+    label: '默认重启端点',
+    url: 'http://127.0.0.1:9099/api/v1/system/restart',
+  },
+]);
+
+const LIST_DEFINITIONS = Object.freeze([
+  { tag: 'whitelist', name: '白名单', placeholder: '例如 example.com 或 full:example.com' },
+  { tag: 'blocklist', name: '黑名单', placeholder: '支持 full:domain 或通配符' },
+  { tag: 'greylist', name: '灰名单', placeholder: '例如 grey.domain.com' },
+  { tag: 'ddnslist', name: 'DDNS 域名', placeholder: '每行一个 DDNS 域名' },
+  
+  { tag: 'client_ip', name: '客户端 IP', placeholder: 'CIDR 或单个 IP，例如 192.168.1.2' },
+]);
+
+const createPreferencesDraft = (settings = createSettingsState()) => ({
+  fakeIpRange: settings.fakeIpRange,
+  domesticDns: settings.domesticDns,
+  socks5Address: settings.socks5Address,
+  proxyInboundAddress: settings.proxyInboundAddress,
+  forwardEcsAddress: settings.forwardEcsAddress,
+});
+
+const normalizeTextValue = (value) => {
+  if (value == null) return '';
+  return String(value).trim();
+};
+
+const normalizeSettingsPayload = (source = {}) => {
+  const normalized = createSettingsState();
+  Object.keys(SETTINGS_FIELDS).forEach((key) => {
+    if (!Object.prototype.hasOwnProperty.call(source, key)) return;
+    const text = normalizeTextValue(source[key]);
+    if (key === 'socks5Address') {
+      normalized[key] = text;
+    } else {
+      normalized[key] = text || SETTINGS_FIELDS[key];
+    }
+  });
+  const socks5Address = normalizeTextValue(normalized.socks5Address);
+  normalized.enableSocks5 = Boolean(socks5Address);
+  normalized.socks5Address = normalized.enableSocks5 ? socks5Address : '';
+  return normalized;
+};
+
 document.addEventListener('DOMContentLoaded', () => {
   createApp({
     data() {
@@ -28,14 +104,7 @@ document.addEventListener('DOMContentLoaded', () => {
         uiSettings: {
           autoRefreshLogs: true,
         },
-        settingsForm: {
-          fakeIpRange: DEFAULT_FAKEIP_RANGE,
-          domesticDns: DEFAULT_DOMESTIC_DNS,
-          enableSocks5: DEFAULT_SOCKS5_ENABLED,
-          socks5Address: DEFAULT_SOCKS5_ADDRESS,
-          proxyInboundAddress: DEFAULT_PROXY_INBOUND,
-          forwardEcsAddress: DEFAULT_FORWARD_ECS,
-        },
+        settingsForm: createSettingsState(),
         banner: null,
         actionPending: false,
         pendingAction: '',
@@ -61,25 +130,32 @@ document.addEventListener('DOMContentLoaded', () => {
         previewError: '',
         previewSaving: false,
         previewSaveProgress: 0,
-        previewSaveTimer: null,
+        progressTickers: Object.create(null),
         configDownloading: false,
         configDownloadProgress: 0,
-        configDownloadTimer: null,
         downloadConfirmOpen: false,
         guideHistory: [],
         guideLogModalOpen: false,
         preferencesModalOpen: false,
         mosdnsSection: 'overview',
         mosdnsNavExpanded: false,
-        preferencesDraft: {
-          fakeIpRange: DEFAULT_FAKEIP_RANGE,
-          domesticDns: DEFAULT_DOMESTIC_DNS,
-          socks5Address: DEFAULT_SOCKS5_ADDRESS,
-          proxyInboundAddress: DEFAULT_PROXY_INBOUND,
-          forwardEcsAddress: DEFAULT_FORWARD_ECS,
-        },
+        preferencesDraft: createPreferencesDraft(),
         settingsSaveProgress: 0,
-        settingsSaveTimer: null,
+        apiEndpoints: MOSDNS_API_ENDPOINTS,
+        listManager: {
+          entries: LIST_DEFINITIONS,
+          current: LIST_DEFINITIONS[2].tag,
+          content: '',
+          loading: false,
+          saving: false,
+          info: '尚未加载',
+          error: '',
+          lines: 0,
+          changed: false,
+          lastSaved: '',
+          newEntry: '',
+          initialized: {},
+        },
       };
     },
     computed: {
@@ -144,6 +220,9 @@ document.addEventListener('DOMContentLoaded', () => {
       },
       hasGuideHistory() {
         return Array.isArray(this.guideHistory) && this.guideHistory.length > 0;
+      },
+      currentListMeta() {
+        return this.listManager.entries.find((item) => item.tag === this.listManager.current) || this.listManager.entries[0];
       },
     },
     methods: {
@@ -230,39 +309,17 @@ document.addEventListener('DOMContentLoaded', () => {
         }
       },
       applySettingsFromServer(serverSettings) {
-        const normalized = { ...this.uiSettings };
+        const normalizedUi = { ...this.uiSettings };
         if (Object.prototype.hasOwnProperty.call(serverSettings, 'autoRefreshLogs')) {
-          normalized.autoRefreshLogs = this.normalizeBool(
+          normalizedUi.autoRefreshLogs = this.normalizeBool(
             serverSettings.autoRefreshLogs,
-            normalized.autoRefreshLogs,
+            normalizedUi.autoRefreshLogs,
           );
         }
-        this.uiSettings = normalized;
-        const nextForm = { ...this.settingsForm };
-        if (Object.prototype.hasOwnProperty.call(serverSettings, 'fakeIpRange')) {
-          const value = (serverSettings.fakeIpRange || '').trim();
-          nextForm.fakeIpRange = value || DEFAULT_FAKEIP_RANGE;
-        }
-        if (Object.prototype.hasOwnProperty.call(serverSettings, 'domesticDns')) {
-          const value = (serverSettings.domesticDns || '').trim();
-          nextForm.domesticDns = value || DEFAULT_DOMESTIC_DNS;
-        }
-        if (Object.prototype.hasOwnProperty.call(serverSettings, 'proxyInboundAddress')) {
-          const value = (serverSettings.proxyInboundAddress || '').trim();
-          nextForm.proxyInboundAddress = value || DEFAULT_PROXY_INBOUND;
-        }
-        if (Object.prototype.hasOwnProperty.call(serverSettings, 'forwardEcsAddress')) {
-          const value = (serverSettings.forwardEcsAddress || '').trim();
-          nextForm.forwardEcsAddress = value || DEFAULT_FORWARD_ECS;
-        }
-        let socksAddress = DEFAULT_SOCKS5_ADDRESS;
-        if (Object.prototype.hasOwnProperty.call(serverSettings, 'socks5Address')) {
-          socksAddress = (serverSettings.socks5Address || '').trim();
-        }
-        nextForm.socks5Address = socksAddress || '';
-        nextForm.enableSocks5 = Boolean((nextForm.socks5Address || '').trim());
-        this.settingsForm = nextForm;
-        this.preferencesDraft = { ...nextForm };
+        this.uiSettings = normalizedUi;
+        const normalizedForm = normalizeSettingsPayload(serverSettings);
+        this.settingsForm = normalizedForm;
+        this.preferencesDraft = createPreferencesDraft(normalizedForm);
       },
       applySettings() {
         const enabled = this.normalizeBool(this.uiSettings.autoRefreshLogs, true);
@@ -447,38 +504,46 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!text) return;
         this.banner = { type, text, ts: Date.now() };
       },
+      startProgressTicker(key, options = {}) {
+        const { initial = 10, step = 5, max = 90, interval = 300 } = options;
+        this.stopProgressTicker(key);
+        this[key] = initial;
+        this.progressTickers[key] = setInterval(() => {
+          if (typeof this[key] !== 'number') {
+            this[key] = initial;
+            return;
+          }
+          if (this[key] < max) {
+            this[key] += step;
+          }
+        }, interval);
+      },
+      stopProgressTicker(key, finalValue = 0) {
+        if (typeof finalValue === 'number') {
+          this[key] = finalValue;
+        }
+        if (this.progressTickers[key]) {
+          clearInterval(this.progressTickers[key]);
+          delete this.progressTickers[key];
+        }
+      },
+      stopAllProgressTickers() {
+        Object.keys(this.progressTickers).forEach((key) => this.stopProgressTicker(key));
+      },
       previewConfig() {
         this.openPreviewModal();
         this.loadPreviewContent();
       },
-      startConfigDownloadTicker() {
-        this.stopConfigDownloadTicker();
-        this.configDownloadProgress = 5;
-        this.configDownloadTimer = setInterval(() => {
-          if (this.configDownloadProgress < 90) {
-            this.configDownloadProgress += 5;
-          }
-        }, 400);
-      },
-      stopConfigDownloadTicker(finalProgress = 0) {
-        if (typeof finalProgress === 'number') {
-          this.configDownloadProgress = finalProgress;
-        }
-        if (this.configDownloadTimer) {
-          clearInterval(this.configDownloadTimer);
-          this.configDownloadTimer = null;
-        }
-      },
       async performDownloadConfig() {
         if (this.configDownloading) return;
         this.configDownloading = true;
-        this.startConfigDownloadTicker();
+        this.startProgressTicker('configDownloadProgress', { initial: 5, step: 5, interval: 400 });
         this.setBanner('info', '正在下载官方 mosdns 配置…');
         try {
           const status = await this.apiRequest('/api/mosdns/config/download', {
             method: 'POST',
           });
-          this.stopConfigDownloadTicker(100);
+          this.stopProgressTicker('configDownloadProgress', 100);
           this.setBanner('success', '配置下载完成并已解压');
           if (status && status.path) {
             this.openModal('配置下载完成', `mosdns 配置已写入 ${status.path}，可继续编辑或启动服务。`);
@@ -487,7 +552,7 @@ document.addEventListener('DOMContentLoaded', () => {
           this.appendGuideHistory(guideSteps);
           await this.loadConfigStatus();
         } catch (err) {
-          this.stopConfigDownloadTicker(0);
+          this.stopProgressTicker('configDownloadProgress', 0);
           this.setBanner('error', `下载失败：${err.message}`);
         } finally {
           setTimeout(() => {
@@ -537,7 +602,7 @@ document.addEventListener('DOMContentLoaded', () => {
         this.guideLogModalOpen = false;
       },
       openPreferencesModal() {
-        this.preferencesDraft = { ...this.settingsForm };
+        this.preferencesDraft = createPreferencesDraft(this.settingsForm);
         this.preferencesModalOpen = true;
       },
       closePreferencesModal() {
@@ -586,44 +651,26 @@ document.addEventListener('DOMContentLoaded', () => {
         this.saveSettings({ autoRefreshLogs: this.uiSettings.autoRefreshLogs });
       },
       async saveConfigPreferences(values) {
-        const source = values || this.settingsForm;
-        const fakeIp = (source.fakeIpRange || '').trim() || DEFAULT_FAKEIP_RANGE;
-        const dns = (source.domesticDns || '').trim() || DEFAULT_DOMESTIC_DNS;
-        const forwardEcsAddress = (source.forwardEcsAddress || '').trim() || DEFAULT_FORWARD_ECS;
-        const proxyInboundAddress =
-          (source.proxyInboundAddress || '').trim() || DEFAULT_PROXY_INBOUND;
-        const socks5Address = (source.socks5Address || '').trim();
-        const enableSocks5 = socks5Address !== '';
-        this.settingsForm.fakeIpRange = fakeIp;
-        this.settingsForm.domesticDns = dns;
-        this.settingsForm.forwardEcsAddress = forwardEcsAddress;
-        this.settingsForm.enableSocks5 = enableSocks5;
-        this.settingsForm.socks5Address = socks5Address;
-        this.settingsForm.proxyInboundAddress = proxyInboundAddress;
+        const normalized = normalizeSettingsPayload(values || this.settingsForm);
+        this.settingsForm = normalized;
         this.settingsSaving = true;
-        this.startSettingsSaveTicker();
+        this.startProgressTicker('settingsSaveProgress', { initial: 12, step: 6, interval: 220 });
         let success = false;
         try {
           await this.saveSettings({
-            fakeIpRange: fakeIp,
-            domesticDns: dns,
-            forwardEcsAddress,
-            proxyInboundAddress,
-            enableSocks5: enableSocks5,
-            socks5Address: socks5Address,
+            fakeIpRange: normalized.fakeIpRange,
+            domesticDns: normalized.domesticDns,
+            forwardEcsAddress: normalized.forwardEcsAddress,
+            proxyInboundAddress: normalized.proxyInboundAddress,
+            enableSocks5: normalized.enableSocks5,
+            socks5Address: normalized.socks5Address,
           });
-          this.stopSettingsSaveTicker(100);
-          this.preferencesDraft = {
-            fakeIpRange: fakeIp,
-            domesticDns: dns,
-            forwardEcsAddress,
-            proxyInboundAddress,
-            socks5Address,
-          };
+          this.stopProgressTicker('settingsSaveProgress', 100);
+          this.preferencesDraft = createPreferencesDraft(normalized);
           this.setBanner('success', '配置偏好已保存，下一次下载将自动应用。');
           success = true;
         } catch (err) {
-          this.stopSettingsSaveTicker(0);
+          this.stopProgressTicker('settingsSaveProgress', 0);
           this.setBanner('error', `保存偏好失败：${err.message}`);
         } finally {
           setTimeout(() => {
@@ -632,24 +679,6 @@ document.addEventListener('DOMContentLoaded', () => {
           this.settingsSaving = false;
         }
         return success;
-      },
-      startSettingsSaveTicker() {
-        this.stopSettingsSaveTicker();
-        this.settingsSaveProgress = 12;
-        this.settingsSaveTimer = setInterval(() => {
-          if (this.settingsSaveProgress < 90) {
-            this.settingsSaveProgress += 6;
-          }
-        }, 220);
-      },
-      stopSettingsSaveTicker(finalProgress = 0) {
-        if (typeof finalProgress === 'number') {
-          this.settingsSaveProgress = finalProgress;
-        }
-        if (this.settingsSaveTimer) {
-          clearInterval(this.settingsSaveTimer);
-          this.settingsSaveTimer = null;
-        }
       },
       openModal(title, message) {
         this.modal = { title: title || '提示', message: message || '' };
@@ -743,14 +772,127 @@ document.addEventListener('DOMContentLoaded', () => {
       setMosdnsSection(section) {
         if (this.mosdnsSection === section) return;
         this.mosdnsSection = section;
+        if (section === 'lists') {
+          this.ensureListLoaded(this.listManager.current);
+        }
       },
       toggleMosdnsNav() {
         this.mosdnsNavExpanded = !this.mosdnsNavExpanded;
       },
+      setActiveList(tag) {
+        if (this.listManager.current === tag) return;
+        this.listManager.current = tag;
+        this.listManager.content = '';
+        this.listManager.info = '正在加载…';
+        this.listManager.error = '';
+        this.listManager.lastSaved = '';
+        this.listManager.newEntry = '';
+        this.ensureListLoaded(tag, true);
+      },
+      async ensureListLoaded(tag, force = false) {
+        const initMap = this.listManager.initialized || {};
+        if (!force && initMap[tag]) return;
+        await this.loadList(tag);
+      },
+      async loadList(tag) {
+        this.listManager.loading = true;
+        this.listManager.error = '';
+        try {
+          const text = await this.requestList(`/api/mosdns/lists/${tag}`);
+          this.listManager.content = text.replace(/\r\n/g, '\n').replace(/\s+$/, '');
+          this.updateListStats(false);
+          this.listManager.initialized = {
+            ...this.listManager.initialized,
+            [tag]: true,
+          };
+          this.listManager.changed = false;
+          this.listManager.lastSaved = '';
+        } catch (err) {
+          this.listManager.error = err.message || '加载失败';
+          this.setBanner('error', `${tag} 读取失败：${err.message}`);
+        } finally {
+          this.listManager.loading = false;
+        }
+      },
+      handleListInput(event) {
+        this.listManager.content = event.target.value;
+        this.updateListStats(true);
+      },
+      updateListStats(markChanged) {
+        const lines = (this.listManager.content || '')
+          .split(/\r?\n/)
+          .map((line) => line.trim())
+          .filter((line) => line.length > 0);
+        this.listManager.lines = lines.length;
+        this.listManager.info = lines.length ? `共 ${lines.length} 行` : '暂无条目';
+        if (markChanged) {
+          this.listManager.changed = true;
+        }
+      },
+      appendListEntry() {
+        const value = (this.listManager.newEntry || '').trim();
+        if (!value) {
+          this.setBanner('error', '请输入要添加的条目');
+          return;
+        }
+        const next = this.listManager.content ? `${this.listManager.content}\n${value}` : value;
+        this.listManager.content = next;
+        this.listManager.newEntry = '';
+        this.updateListStats(true);
+      },
+      buildListPayload() {
+        const values = (this.listManager.content || '')
+          .split(/\r?\n/)
+          .map((line) => line.trim())
+          .filter((line) => line.length > 0);
+        return { values };
+      },
+      async saveCurrentList() {
+        if (this.listManager.saving) return;
+        const payload = this.buildListPayload();
+        this.listManager.saving = true;
+        this.listManager.error = '';
+        try {
+          await this.requestList(`/api/mosdns/lists/${this.listManager.current}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+          });
+          this.listManager.changed = false;
+          this.listManager.lastSaved = this.formatTime(new Date());
+          this.setBanner('success', `${this.currentListMeta.name} 已保存`);
+          this.updateListStats(false);
+        } catch (err) {
+          this.listManager.error = err.message || '保存失败';
+          this.setBanner('error', `${this.currentListMeta.name} 保存失败：${err.message}`);
+        } finally {
+          this.listManager.saving = false;
+        }
+      },
+      async requestList(path, options = {}) {
+        const resp = await fetch(path, options);
+        const text = await resp.text();
+        if (!resp.ok) {
+          throw new Error(text || resp.statusText);
+        }
+        return text;
+      },
+      async updateAdguard() {
+        try {
+          const resp = await fetch('/api/mosdns/adguard/update', { method: 'POST' });
+          if (!resp.ok) {
+            const text = await resp.text();
+            throw new Error(text || resp.statusText);
+          }
+          this.setBanner('success', 'AdGuard 规则更新任务已触发');
+        } catch (err) {
+          this.setBanner('error', `AdGuard 更新失败：${err.message}`);
+        }
+      },
       async savePreviewFile() {
         if (!this.previewActiveFile) return;
         this.previewSaving = true;
-        this.startPreviewSaveTicker();
+        this.startProgressTicker('previewSaveProgress', { initial: 15, step: 7, interval: 200 });
         try {
           await this.apiRequest(`/api/mosdns/config/file?file=${encodeURIComponent(this.previewActiveFile)}`, {
             method: 'PUT',
@@ -758,9 +900,9 @@ document.addEventListener('DOMContentLoaded', () => {
           });
           this.updateTreeContent(this.previewActiveFile, this.previewEditingContent);
           this.setBanner('success', `${this.previewActiveFile} 已保存`);
-          this.stopPreviewSaveTicker(100);
+          this.stopProgressTicker('previewSaveProgress', 100);
         } catch (err) {
-          this.stopPreviewSaveTicker(0);
+          this.stopProgressTicker('previewSaveProgress', 0);
           this.setBanner('error', `保存失败：${err.message}`);
         } finally {
           this.previewSaving = false;
@@ -786,24 +928,6 @@ document.addEventListener('DOMContentLoaded', () => {
       },
       reloadPreview() {
         this.loadPreviewContent();
-      },
-      startPreviewSaveTicker() {
-        this.stopPreviewSaveTicker();
-        this.previewSaveProgress = 15;
-        this.previewSaveTimer = setInterval(() => {
-          if (this.previewSaveProgress < 90) {
-            this.previewSaveProgress += 7;
-          }
-        }, 200);
-      },
-      stopPreviewSaveTicker(finalProgress = 0) {
-        if (typeof finalProgress === 'number') {
-          this.previewSaveProgress = finalProgress;
-        }
-        if (this.previewSaveTimer) {
-          clearInterval(this.previewSaveTimer);
-          this.previewSaveTimer = null;
-        }
       },
       traceAction(message) {
         this.touchUpdate(message || '记录操作');
@@ -855,11 +979,9 @@ document.addEventListener('DOMContentLoaded', () => {
     },
     beforeUnmount() {
       this.stopAutoLogRefresh();
-      this.stopConfigDownloadTicker();
+      this.stopAllProgressTickers();
       this.closeGuideLog();
       this.closePreferencesModal();
-      this.stopSettingsSaveTicker();
-      this.stopPreviewSaveTicker();
     },
   }).mount('#app');
 });

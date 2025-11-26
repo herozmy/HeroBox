@@ -159,6 +159,63 @@ body {
   min-height: 200px;
 }
 
+.cards--lists {
+  grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+}
+
+.card--lists {
+  gap: 16px;
+}
+
+.list-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.list-tab {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 6px 14px;
+  background: #fff;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.list-tab.active {
+  background: var(--brand);
+  color: #fff;
+  border-color: var(--brand);
+}
+
+.greylist-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+}
+
+.greylist-input {
+  flex: 1;
+  min-width: 240px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  font-size: 14px;
+}
+
+.list-textarea {
+  width: 100%;
+  min-height: 280px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  padding: 16px;
+  font-size: 13px;
+  font-family: "SFMono-Regular", Consolas, "Courier New", monospace;
+  resize: vertical;
+  background: #fdfdfd;
+}
+
 .card__header {
   display: flex;
   justify-content: space-between;

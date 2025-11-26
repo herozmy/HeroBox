@@ -380,14 +380,82 @@
           </div>
         </section>
 
-        <section v-else class="cards cards--placeholder">
-          <article class="card">
-            <h2>名单管理</h2>
-            <p class="muted">此处将托管白名单/黑名单等列表，后续版本会加入导入导出、批量编辑功能。</p>
-            <div class="button-row">
-              <button class="btn" disabled>导入名单</button>
-              <button class="btn" disabled>导出名单</button>
+        <section v-else class="cards cards--lists">
+          <article class="card card--lists">
+            <div class="card__header">
+              <h2>名单管理</h2>
+              <div class="card__actions">
+                <button class="btn" @click="loadList(listManager.current)" :disabled="listManager.loading">
+                  {{ listManager.loading ? '读取中…' : '重新读取' }}
+                </button>
+                <button class="btn" type="button" @click="updateAdguard">更新 AdGuard</button>
+                <button class="btn primary" @click="saveCurrentList" :disabled="listManager.saving || listManager.loading">
+                  {{ listManager.saving ? '保存中…' : '保存' }}
+                </button>
+              </div>
             </div>
+            <div class="list-tabs">
+              <button
+                v-for="entry in listManager.entries"
+                :key="entry.tag"
+                class="list-tab"
+                :class="{ active: entry.tag === listManager.current }"
+                type="button"
+                @click="setActiveList(entry.tag)"
+              >{{ entry.name }}</button>
+            </div>
+            <p class="muted">使用 mosdns `/plugins/{{ listManager.current }}/*` 接口实时读取与写入名单。</p>
+            <div class="greylist-toolbar">
+              <input
+                type="text"
+                class="greylist-input"
+                v-model="listManager.newEntry"
+                @keyup.enter="appendListEntry"
+                :placeholder="currentListMeta.placeholder"
+                :disabled="listManager.loading"
+              />
+              <button class="btn" type="button" @click="appendListEntry" :disabled="listManager.loading">
+                添加一行
+              </button>
+              <span class="muted">{{ listManager.info }}</span>
+            </div>
+            <textarea
+              class="list-textarea"
+              :value="listManager.content"
+              @input="handleListInput"
+              :disabled="listManager.loading"
+              placeholder="每行一个条目，例如 full:domain"
+            ></textarea>
+            <p class="muted" v-if="listManager.error">{{ listManager.error }}</p>
+            <p class="muted" v-else>
+              <span v-if="listManager.lastSaved">最近保存：{{ listManager.lastSaved }}。</span>
+              <span v-if="listManager.changed">存在未保存的修改。</span>
+            </p>
+          </article>
+
+          <article class="card card--lists">
+            <div class="card__header">
+              <h2>说明</h2>
+            </div>
+            <ul class="dashboard-list">
+              <li>
+                <span>白/黑/灰名单</span>
+                <span>支持 `full:domain`、通配符等 mosdns 原生语法。</span>
+              </li>
+              <li>
+                <span>DDNS 列表</span>
+                <span>建议仅填 root 域名，实时走本地 forward。</span>
+              </li>
+              <li>
+                <span>客户端 IP</span>
+                <span>使用 CIDR 表达式限制访问，例如 `192.168.1.0/24`。</span>
+              </li>
+              <li>
+                <span>AdGuard 更新</span>
+                <span>调用 `/plugins/adguard/update` 立即刷新规则。</span>
+              </li>
+            </ul>
+            <p class="muted">若需要新增名单类型，可在 mosdns 子配置追加插件后再扩展前端。</p>
           </article>
         </section>
 

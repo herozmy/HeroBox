@@ -45,6 +45,7 @@ type ServiceHooks struct {
 	Start   func(ctx context.Context, spec ServiceSpec) error
 	Stop    func(ctx context.Context, spec ServiceSpec) error
 	Restart func(ctx context.Context, spec ServiceSpec) error
+	Status  func(ctx context.Context, spec ServiceSpec) (Status, error)
 }
 
 // Manager 负责通过 systemctl 控制服务，若系统不支持则自动切换为内存模拟模式。
@@ -184,6 +185,14 @@ func (m *Manager) Status(ctx context.Context, name string) (Snapshot, error) {
 	if !m.binaryReady(spec) {
 		m.recordState(spec.Name, StatusMissing)
 		logService(spec, "error", "%s 状态：missing（binary 未找到）", spec.Name)
+		return m.snapshot(spec.Name), nil
+	}
+	if spec.Hooks.Status != nil {
+		status, err := spec.Hooks.Status(ctx, spec)
+		if err != nil {
+			return Snapshot{}, err
+		}
+		m.recordState(spec.Name, status)
 		return m.snapshot(spec.Name), nil
 	}
 	if m.useCtl {

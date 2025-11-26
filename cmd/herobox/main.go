@@ -2,17 +2,20 @@ package main
 
 import (
 	"archive/zip"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -84,6 +87,49 @@ func main() {
 	configArchiveURL := getenv("MOSDNS_CONFIG_ARCHIVE", defaultConfigArchive)
 
 	mux := http.NewServeMux()
+	mosdnsPluginBase := strings.TrimRight(getenv("MOSDNS_PLUGIN_BASE", ""), "/")
+	mosdnsPluginPort := strings.TrimSpace(getenv("MOSDNS_PLUGIN_PORT", "9099"))
+	pluginClient := &http.Client{Timeout: 15 * time.Second}
+	proxyMosdnsPlugin := func(r *http.Request, path, method, contentType string, body []byte) ([]byte, int, error) {
+		baseURL := mosdnsPluginBase
+		if baseURL == "" {
+			port := mosdnsPluginPort
+			if port == "" {
+				port = "9099"
+			}
+			baseURL = "http://" + net.JoinHostPort("127.0.0.1", port)
+		}
+		url := baseURL + path
+		var reader io.Reader
+		if len(body) > 0 {
+			reader = bytes.NewReader(body)
+		}
+		req, err := http.NewRequest(method, url, reader)
+		if err != nil {
+			return nil, 0, err
+		}
+		if contentType != "" {
+			req.Header.Set("Content-Type", contentType)
+		}
+		resp, err := pluginClient.Do(req)
+		if err != nil {
+			return nil, 0, err
+		}
+		defer resp.Body.Close()
+		data, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return nil, resp.StatusCode, err
+		}
+		if resp.StatusCode >= http.StatusBadRequest {
+			msg := strings.TrimSpace(string(data))
+			if msg == "" {
+				msg = resp.Status
+			}
+			return nil, resp.StatusCode, errors.New(msg)
+		}
+		return data, resp.StatusCode, nil
+	}
+
 	mux.HandleFunc("/api/services", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			methodNotAllowed(w)
@@ -323,6 +369,124 @@ func main() {
 		default:
 			methodNotAllowed(w)
 		}
+	})
+
+	mux.HandleFunc("/api/mosdns/greylist", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			data, _, err := proxyMosdnsPlugin(r, "/plugins/greylist/show", http.MethodGet, "", nil)
+			if err != nil {
+				respondErr(w, err)
+				return
+			}
+			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+			w.Write(data)
+		case http.MethodPost:
+			payload, err := io.ReadAll(r.Body)
+			if err != nil {
+				respondErr(w, fmt.Errorf("读取请求失败: %w", err))
+				return
+			}
+			data, _, err := proxyMosdnsPlugin(r, "/plugins/greylist/post", http.MethodPost, r.Header.Get("Content-Type"), payload)
+			if err != nil {
+				respondErr(w, err)
+				return
+			}
+			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+			w.Write(data)
+		default:
+			methodNotAllowed(w)
+		}
+	})
+
+	mux.HandleFunc("/api/mosdns/greylist/save", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			methodNotAllowed(w)
+			return
+		}
+		data, _, err := proxyMosdnsPlugin(r, "/plugins/greylist/save", http.MethodGet, "", nil)
+		if err != nil {
+			respondErr(w, err)
+			return
+		}
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.Write(data)
+	})
+
+	allowedListTags := map[string]string{
+		"whitelist": "whitelist",
+		"blocklist": "blocklist",
+		"greylist":  "greylist",
+		"ddnslist":  "ddnslist",
+		"client_ip": "client_ip",
+	}
+
+	mux.HandleFunc("/api/mosdns/lists/", func(w http.ResponseWriter, r *http.Request) {
+		trimmed := strings.TrimPrefix(r.URL.Path, "/api/mosdns/lists/")
+		if trimmed == r.URL.Path || trimmed == "" {
+			http.NotFound(w, r)
+			return
+		}
+		tag := strings.Trim(trimmed, "/")
+		pluginTag, ok := allowedListTags[tag]
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		switch r.Method {
+		case http.MethodGet:
+			data, _, err := proxyMosdnsPlugin(r, "/plugins/"+pluginTag+"/show", http.MethodGet, "", nil)
+			if err != nil {
+				respondErr(w, err)
+				return
+			}
+			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+			w.Write(data)
+		case http.MethodPost:
+			payload, err := io.ReadAll(r.Body)
+			if err != nil {
+				respondErr(w, fmt.Errorf("读取请求失败: %w", err))
+				return
+			}
+			if len(payload) == 0 {
+				respondErr(w, errors.New("请求体不能为空"))
+				return
+			}
+			if _, _, err := proxyMosdnsPlugin(r, "/plugins/"+pluginTag+"/post", http.MethodPost, r.Header.Get("Content-Type"), payload); err != nil {
+				respondErr(w, err)
+				return
+			}
+			if _, _, err := proxyMosdnsPlugin(r, "/plugins/"+pluginTag+"/save", http.MethodGet, "", nil); err != nil {
+				respondErr(w, err)
+				return
+			}
+			respondJSON(w, map[string]any{"saved": true})
+		default:
+			methodNotAllowed(w)
+		}
+	})
+
+	mux.HandleFunc("/api/mosdns/adguard/update", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			methodNotAllowed(w)
+			return
+		}
+		payload, err := io.ReadAll(r.Body)
+		if err != nil {
+			respondErr(w, fmt.Errorf("读取请求失败: %w", err))
+			return
+		}
+		data, _, err := proxyMosdnsPlugin(r, "/plugins/adguard/update", http.MethodPost, r.Header.Get("Content-Type"), payload)
+		if err != nil {
+			respondErr(w, err)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		if len(data) == 0 {
+			respondJSON(w, map[string]any{"updated": true})
+			return
+		}
+		w.Write(data)
 	})
 
 	mux.HandleFunc("/api/settings", func(w http.ResponseWriter, r *http.Request) {
@@ -1189,11 +1353,14 @@ func isAllowedConfigFile(name string) bool {
 		strings.HasSuffix(lower, ".yml") ||
 		strings.HasSuffix(lower, ".txt") ||
 		strings.HasSuffix(lower, ".conf") ||
-		strings.HasSuffix(lower, ".cfg")
+		strings.HasSuffix(lower, ".cfg") ||
+		strings.HasSuffix(lower, ".json")
 }
 
 func newMosdnsHooks(store *config.Store) service.ServiceHooks {
 	defaultDataDir := getenv("MOSDNS_DATA_DIR", "")
+	statusHost := getenv("MOSDNS_STATUS_HOST", "127.0.0.1")
+	statusPort := getenv("MOSDNS_PLUGIN_PORT", "9099")
 	return service.ServiceHooks{
 		Start: func(ctx context.Context, spec service.ServiceSpec) error {
 			binary, err := firstExistingBinary(spec.BinaryPaths)
@@ -1234,7 +1401,46 @@ func newMosdnsHooks(store *config.Store) service.ServiceHooks {
 			}
 			return store.SetMosdnsPID(pid)
 		},
+		Status: func(ctx context.Context, spec service.ServiceSpec) (service.Status, error) {
+			if pid := store.MosdnsPID(); pid > 0 {
+				if processAlive(pid) {
+					return service.StatusRunning, nil
+				}
+				_ = store.SetMosdnsPID(0)
+			}
+			ctx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+			defer cancel()
+			if isMosdnsAPIAlive(ctx, statusHost, statusPort) {
+				return service.StatusRunning, nil
+			}
+			return service.StatusStopped, nil
+		},
 	}
+}
+
+func processAlive(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		return false
+	}
+	if runtime.GOOS == "windows" {
+		return true
+	}
+	return proc.Signal(syscall.Signal(0)) == nil
+}
+
+func isMosdnsAPIAlive(ctx context.Context, host, port string) bool {
+	addr := net.JoinHostPort(host, port)
+	dialer := &net.Dialer{}
+	conn, err := dialer.DialContext(ctx, "tcp", addr)
+	if err != nil {
+		return false
+	}
+	conn.Close()
+	return true
 }
 
 func resolveMosdnsDataDir(envDir, configPath string) string {
