@@ -3,35 +3,11 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>HeroBox 仪表盘</title>
-    <link rel="stylesheet" href="./styles.css" />
+    <title>HeroBox 控制台</title>
+    <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
-    <div class="layout">
-      <aside class="sidebar">
-        <div class="logo">HeroBox</div>
-        <nav>
-          <a class="nav-btn active" href="./index.html">仪表盘</a>
-          <a class="nav-btn" href="./mosdns.html">Mosdns</a>
-        </nav>
-      </aside>
-
-      <main class="content">
-        <header class="content__header">
-          <div>
-            <div class="muted">基础信息</div>
-            <h1>仪表盘</h1>
-          </div>
-          <button class="btn soft" disabled>记录操作</button>
-        </header>
-
-        <section>
-          <div class="empty-state">
-            <h2>仪表盘仍在搭建中</h2>
-            <p>未来将补充全局运行概览、告警摘要与代理拓扑。</p>
-          </div>
-        </section>
-      </main>
-    </div>
+    <div id="app"></div>
+    <script type="module" src="/src/main.js"></script>
   </body>
 </html>

@@ -11,6 +11,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -87,18 +88,9 @@ func main() {
 	configArchiveURL := getenv("MOSDNS_CONFIG_ARCHIVE", defaultConfigArchive)
 
 	mux := http.NewServeMux()
-	mosdnsPluginBase := strings.TrimRight(getenv("MOSDNS_PLUGIN_BASE", ""), "/")
-	mosdnsPluginPort := strings.TrimSpace(getenv("MOSDNS_PLUGIN_PORT", "9099"))
 	pluginClient := &http.Client{Timeout: 15 * time.Second}
 	proxyMosdnsPlugin := func(r *http.Request, path, method, contentType string, body []byte) ([]byte, int, error) {
-		baseURL := mosdnsPluginBase
-		if baseURL == "" {
-			port := mosdnsPluginPort
-			if port == "" {
-				port = "9099"
-			}
-			baseURL = "http://" + net.JoinHostPort("127.0.0.1", port)
-		}
+		baseURL := resolveMosdnsPluginBaseURL(configStore)
 		url := baseURL + path
 		var reader io.Reader
 		if len(body) > 0 {
@@ -514,7 +506,7 @@ func main() {
 
 	staticDir := resolveStaticDir()
 	log.Printf("静态资源目录: %s", staticDir)
-	mux.Handle("/", http.FileServer(http.Dir(staticDir)))
+	mux.Handle("/", spaFileServer(staticDir))
 
 	srv := &http.Server{
 		Addr:    addr,
@@ -702,6 +694,56 @@ func resolveStaticDir() string {
 		}
 	}
 	return "."
+}
+
+func spaFileServer(root string) http.Handler {
+	fs := http.Dir(root)
+	fileServer := http.FileServer(fs)
+	indexPath := filepath.Join(root, "index.html")
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			fileServer.ServeHTTP(w, r)
+			return
+		}
+		if strings.HasPrefix(r.URL.Path, "/api/") {
+			http.NotFound(w, r)
+			return
+		}
+
+		if fileExists(fs, r.URL.Path) {
+			fileServer.ServeHTTP(w, r)
+			return
+		}
+
+		if shouldFallbackToSPA(r.URL.Path) {
+			http.ServeFile(w, r, indexPath)
+			return
+		}
+
+		http.NotFound(w, r)
+	})
+}
+
+func fileExists(fs http.FileSystem, path string) bool {
+	f, err := fs.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	_, err = f.Stat()
+	return err == nil
+}
+
+func shouldFallbackToSPA(p string) bool {
+	if p == "" || p == "/" {
+		return true
+	}
+	base := filepath.Base(p)
+	if base == "." || base == "" {
+		return true
+	}
+	return !strings.Contains(base, ".")
 }
 
 func buildConfigStatus(path string) map[string]any {
@@ -1113,6 +1155,102 @@ func resolveSetting(store *config.Store, key, fallback string) string {
 	return fallback
 }
 
+func resolveMosdnsPluginBaseURL(store *config.Store) string {
+	base := effectiveMosdnsPluginBase(store)
+	if base == "" {
+		host := resolveMosdnsPluginHost(store)
+		if host == "" {
+			host = "127.0.0.1"
+		}
+		port := resolveMosdnsPluginPort(store)
+		if port == "" {
+			port = "9099"
+		}
+		base = "http://" + net.JoinHostPort(host, port)
+	}
+	return strings.TrimRight(base, "/")
+}
+
+func effectiveMosdnsPluginBase(store *config.Store) string {
+	if base := normalizePluginBaseURL(getenv("MOSDNS_PLUGIN_BASE", "")); base != "" {
+		return base
+	}
+	if store != nil {
+		if base := normalizePluginBaseURL(resolveSetting(store, "mosdnsPluginBase", "")); base != "" {
+			return base
+		}
+	}
+	return ""
+}
+
+func resolveMosdnsPluginPort(store *config.Store) string {
+	if port := strings.TrimSpace(getenv("MOSDNS_PLUGIN_PORT", "")); port != "" {
+		return port
+	}
+	if base := getenv("MOSDNS_PLUGIN_BASE", ""); base != "" {
+		if _, p := pluginBaseHostPort(base); p != "" {
+			return p
+		}
+	}
+	if store != nil {
+		if base := resolveSetting(store, "mosdnsPluginBase", ""); base != "" {
+			if _, p := pluginBaseHostPort(base); p != "" {
+				return p
+			}
+		}
+		if port := strings.TrimSpace(resolveSetting(store, "mosdnsPluginPort", "")); port != "" {
+			return port
+		}
+	}
+	return "9099"
+}
+
+func resolveMosdnsPluginHost(store *config.Store) string {
+	if host := strings.TrimSpace(getenv("MOSDNS_STATUS_HOST", "")); host != "" {
+		return host
+	}
+	if base := getenv("MOSDNS_PLUGIN_BASE", ""); base != "" {
+		if h, _ := pluginBaseHostPort(base); h != "" {
+			return h
+		}
+	}
+	if store != nil {
+		if base := resolveSetting(store, "mosdnsPluginBase", ""); base != "" {
+			if h, _ := pluginBaseHostPort(base); h != "" {
+				return h
+			}
+		}
+		if host := strings.TrimSpace(resolveSetting(store, "mosdnsPluginHost", "")); host != "" {
+			return host
+		}
+	}
+	return "127.0.0.1"
+}
+
+func normalizePluginBaseURL(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	trimmed = strings.TrimRight(trimmed, "/")
+	if trimmed == "" {
+		return ""
+	}
+	if strings.Contains(trimmed, "://") {
+		return trimmed
+	}
+	return "http://" + trimmed
+}
+
+func pluginBaseHostPort(raw string) (string, string) {
+	normalized := normalizePluginBaseURL(raw)
+	if normalized == "" {
+		return "", ""
+	}
+	u, err := url.Parse(normalized)
+	if err != nil {
+		return "", ""
+	}
+	return u.Hostname(), u.Port()
+}
+
 func resolveBoolSetting(store *config.Store, key string, fallback bool) bool {
 	if store == nil {
 		return fallback
@@ -1359,8 +1497,6 @@ func isAllowedConfigFile(name string) bool {
 
 func newMosdnsHooks(store *config.Store) service.ServiceHooks {
 	defaultDataDir := getenv("MOSDNS_DATA_DIR", "")
-	statusHost := getenv("MOSDNS_STATUS_HOST", "127.0.0.1")
-	statusPort := getenv("MOSDNS_PLUGIN_PORT", "9099")
 	return service.ServiceHooks{
 		Start: func(ctx context.Context, spec service.ServiceSpec) error {
 			binary, err := firstExistingBinary(spec.BinaryPaths)
@@ -1410,7 +1546,9 @@ func newMosdnsHooks(store *config.Store) service.ServiceHooks {
 			}
 			ctx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
 			defer cancel()
-			if isMosdnsAPIAlive(ctx, statusHost, statusPort) {
+			host := resolveMosdnsPluginHost(store)
+			port := resolveMosdnsPluginPort(store)
+			if isMosdnsAPIAlive(ctx, host, port) {
 				return service.StatusRunning, nil
 			}
 			return service.StatusStopped, nil
