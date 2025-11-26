@@ -200,9 +200,16 @@ const loadLogs = async () => {
   try {
     const payload = await getMosdnsLogs();
     const entries = Array.isArray(payload.entries) ? payload.entries : [];
-    logsEntries.value = entries.filter((item) =>
-      typeof item.message === 'string' && item.message.includes('[mosdns]'),
-    );
+    logsEntries.value = entries
+      .map((item) => {
+        if (typeof item === 'string') {
+          return { timestamp: Date.now(), message: item };
+        }
+        const ts = item.timestamp || item.time || Date.now();
+        const message = typeof item.message === 'string' ? item.message : '';
+        return { timestamp: ts, message };
+      })
+      .filter((item) => item.message);
   } catch (err) {
     setBanner('error', `获取日志失败：${err.message}`);
   } finally {
