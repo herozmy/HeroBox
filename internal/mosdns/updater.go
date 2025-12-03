@@ -138,12 +138,12 @@ func (u *Updater) UpdateLatest(ctx context.Context) (*Release, string, error) {
 
 	asset, err := selectAsset(rel.Assets, u.AssetHint)
 	if err != nil {
-		logs.Errorf("[mosdns] 选择资产失败: %v", err)
+		logs.Errorf("[mosdns] 选择配置失败: %v", err)
 		return nil, "", err
 	}
 
 	target := filepath.Join(u.InstallDir, "mosdns")
-	logs.Infof("[mosdns] 下载资产 %s -> %s", asset.Name, target)
+	logs.Infof("[mosdns] 下载配置 %s -> %s", asset.Name, target)
 	if err := downloadAndExtract(ctx, asset.BrowserDownloadURL, target); err != nil {
 		logs.Errorf("[mosdns] 下载或解压失败: %v", err)
 		return nil, "", err

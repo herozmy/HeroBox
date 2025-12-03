@@ -47,18 +47,18 @@ watch(banner, (newVal) => {
           </button>
           <div class="nav-sub" v-show="mosdnsNavExpanded || route.path.startsWith('/mosdns')">
             <router-link
-              to="/mosdns?section=overview"
+              to="/mosdns"
               class="nav-sub__btn"
-              :class="{ active: route.path.startsWith('/mosdns') && route.query.section !== 'lists' }"
+              :class="{ active: route.path === '/mosdns' || route.path === '/mosdns/' }"
             >
               总览
             </router-link>
             <router-link
-              to="/mosdns?section=lists"
+              to="/mosdns/advanced"
               class="nav-sub__btn"
-              :class="{ active: route.path.startsWith('/mosdns') && route.query.section === 'lists' }"
+              :class="{ active: route.path.startsWith('/mosdns/advanced') }"
             >
-              名单管理
+              高级管理
             </router-link>
           </div>
         </div>

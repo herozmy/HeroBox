@@ -1,6 +1,8 @@
 import { createRouter, createWebHistory } from 'vue-router';
 import Dashboard from '../views/Dashboard.vue';
-import MosdnsPage from '../views/Mosdns/MosdnsPage.vue';
+import MosdnsLayout from '../views/Mosdns/MosdnsPage.vue';
+import MosdnsOverviewPage from '../views/Mosdns/MosdnsOverviewPage.vue';
+import MosdnsAdvancedPage from '../views/Mosdns/MosdnsAdvancedPage.vue';
 
 const routes = [
   {
@@ -10,9 +12,19 @@ const routes = [
   },
   {
     path: '/mosdns',
-    name: 'Mosdns',
-    component: MosdnsPage,
-    // MosdnsPage internally manages 'overview' and 'lists' sections
+    component: MosdnsLayout,
+    children: [
+      {
+        path: '',
+        name: 'MosdnsOverview',
+        component: MosdnsOverviewPage,
+      },
+      {
+        path: 'advanced',
+        name: 'MosdnsAdvanced',
+        component: MosdnsAdvancedPage,
+      },
+    ],
   },
 ];
 

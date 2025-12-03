@@ -78,7 +78,12 @@ export const saveListContent = (tag, values) => apiRequest(`/api/mosdns/lists/${
   headers: { 'Content-Type': 'application/json' },
   body: JSON.stringify({ values }),
 });
-export const updateAdguardRules = () => apiRequest('/api/mosdns/adguard/update', { method: 'POST' });
+export const getSwitchValue = (tag) => apiRequest(`/api/mosdns/switches/${tag}`);
+export const setSwitchValue = (tag, value) => apiRequest(`/api/mosdns/switches/${tag}`, {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ value }),
+});
 
 // Utility functions from original mosdns.js
 export const LATEST_VERSION_CACHE_KEY = 'herobox.mosdns.latestVersion';

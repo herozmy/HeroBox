@@ -417,6 +417,17 @@ func main() {
 		"ddnslist":  "ddnslist",
 		"client_ip": "client_ip",
 	}
+	allowedSwitchTags := map[string]string{
+		"switch1": "switch1",
+		"switch2": "switch2",
+		"switch3": "switch3",
+		"switch4": "switch4",
+		"switch5": "switch5",
+		"switch6": "switch6",
+		"switch7": "switch7",
+		"switch8": "switch8",
+		"switch9": "switch9",
+	}
 
 	mux.HandleFunc("/api/mosdns/lists/", func(w http.ResponseWriter, r *http.Request) {
 		trimmed := strings.TrimPrefix(r.URL.Path, "/api/mosdns/lists/")
@@ -463,27 +474,56 @@ func main() {
 		}
 	})
 
-	mux.HandleFunc("/api/mosdns/adguard/update", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			methodNotAllowed(w)
+	mux.HandleFunc("/api/mosdns/switches/", func(w http.ResponseWriter, r *http.Request) {
+		trimmed := strings.TrimPrefix(r.URL.Path, "/api/mosdns/switches/")
+		if trimmed == r.URL.Path || trimmed == "" {
+			http.NotFound(w, r)
 			return
 		}
-		payload, err := io.ReadAll(r.Body)
-		if err != nil {
-			respondErr(w, fmt.Errorf("读取请求失败: %w", err))
+		name := strings.Trim(trimmed, "/")
+		tag, ok := allowedSwitchTags[name]
+		if !ok {
+			http.NotFound(w, r)
 			return
 		}
-		data, _, err := proxyMosdnsPlugin(r, "/plugins/adguard/update", http.MethodPost, r.Header.Get("Content-Type"), payload)
-		if err != nil {
-			respondErr(w, err)
+		switchURL := "/plugins/" + tag
+		switchValuePath := switchURL + "/show"
+		switchUpdatePath := switchURL + "/post"
+		if r.Method == http.MethodGet {
+			data, _, err := proxyMosdnsPlugin(r, switchValuePath, http.MethodGet, "", nil)
+			if err != nil {
+				respondErr(w, err)
+				return
+			}
+			respondJSON(w, map[string]any{"value": strings.TrimSpace(string(data))})
 			return
 		}
-		w.Header().Set("Content-Type", "application/json; charset=utf-8")
-		if len(data) == 0 {
-			respondJSON(w, map[string]any{"updated": true})
+		if r.Method == http.MethodPost {
+			var payload struct {
+				Value string `json:"value"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				respondErr(w, fmt.Errorf("无效的请求体: %w", err))
+				return
+			}
+			value := strings.TrimSpace(payload.Value)
+			if value == "" {
+				respondErr(w, errors.New("缺少 value"))
+				return
+			}
+			body := []byte(fmt.Sprintf(`{"value":"%s"}`, value))
+			if _, _, err := proxyMosdnsPlugin(r, switchUpdatePath, http.MethodPost, "application/json", body); err != nil {
+				respondErr(w, err)
+				return
+			}
+			if _, _, err := proxyMosdnsPlugin(r, switchURL+"/save", http.MethodGet, "", nil); err != nil {
+				respondErr(w, err)
+				return
+			}
+			respondJSON(w, map[string]any{"value": value})
 			return
 		}
-		w.Write(data)
+		methodNotAllowed(w)
 	})
 
 	mux.HandleFunc("/api/settings", func(w http.ResponseWriter, r *http.Request) {

@@ -1,6 +1,6 @@
 <script setup>
 import { ref, reactive, computed, onMounted, onUnmounted, watch, provide, inject } from 'vue';
-import { useRoute } from 'vue-router';
+import { RouterView } from 'vue-router';
 import {
   apiRequest,
   getServiceStatus,
@@ -19,7 +19,8 @@ import {
   saveMosdnsConfigFile,
   getListContent,
   saveListContent,
-  updateAdguardRules,
+  getSwitchValue,
+  setSwitchValue,
   LATEST_VERSION_CACHE_KEY,
   DEFAULT_FAKEIP_RANGE,
   DEFAULT_DOMESTIC_DNS,
@@ -39,27 +40,10 @@ import {
 
 import BaseModal from '../../components/BaseModal.vue';
 import ProgressBar from '../../components/ProgressBar.vue';
-import MosdnsOverview from './MosdnsOverview.vue';
-import MosdnsListManagement from './MosdnsListManagement.vue';
-
-const route = useRoute();
 const setBanner = inject('setBanner');
 
 // --- Mosdns Section State ---
-const mosdnsSection = ref('overview'); // 'overview' or 'lists'
-watch(
-  () => route.query.section,
-  (newSection) => {
-    const section = newSection || 'overview';
-    if (section === 'lists' && mosdns.status !== 'running') {
-      setBanner('error', 'mosdns 未运行，名单管理暂不可用');
-      mosdnsSection.value = 'overview';
-      return;
-    }
-    mosdnsSection.value = section;
-  },
-  { immediate: true },
-);
+// Layout now serves as provider for sub-routes; no section switching needed
 
 // --- Global Modals State ---
 const showInfoModal = reactive({
@@ -791,13 +775,25 @@ const usingDefaultPreferences = computed(() => {
 const hasGuideHistory = computed(() => Array.isArray(guideHistory.value) && guideHistory.value.length > 0);
 
 // Provide state/methods to child components (MosdnsOverview, MosdnsListManagement)
-provide('mosdnsState', { mosdns, config, uiSettings, settingsForm, guideHistory });
+provide('mosdnsState', {
+  mosdns,
+  config,
+  uiSettings,
+  settingsForm,
+  guideHistory,
+  actionPending,
+  pendingAction,
+  updatePending,
+  configDownloading,
+  progressTickers,
+});
 provide('mosdnsActions', {
   loadServiceStatus, loadConfigStatus, loadLogs, saveComponentSettings,
   openModal, openLogsModal, handleStartOrRestart, toggleMosdns,
   refreshVersion, applyLatest, previewConfig, handleDownloadConfig,
   openGuideLog, openPreferencesModal, openConfigEditor, saveConfigPreferences,
   appendGuideHistory,
+  handleAutoRefreshToggle,
 });
 provide('modalControls', {
   openModal, closeModal, openLogsModal, closeLogsModal,
@@ -805,7 +801,7 @@ provide('modalControls', {
   openPreviewModal, closePreviewModal, openGuideLog, closeGuideLog,
 });
 // Special provides for list management
-provide('listApi', { getListContent, saveListContent, updateAdguardRules });
+provide('listApi', { getListContent, saveListContent, getSwitchValue, setSwitchValue });
 
 // --- Lifecycle Hooks ---
 onMounted(() => {
@@ -1005,44 +1001,7 @@ onUnmounted(() => {
     </template>
   </BaseModal>
 
-  <!-- Mosdns Content -->
-  <header class="content__header">
-    <div>
-      <div class="muted">基础信息</div>
-      <h1>Mosdns</h1>
-    </div>
-  </header>
-
-  <section v-if="mosdnsSection === 'overview'">
-    <MosdnsOverview
-      :mosdns="mosdns"
-      :config="config"
-      :ui-settings="uiSettings"
-      :settings-form="settingsForm"
-      :action-pending="actionPending"
-      :pending-action="pendingAction"
-      :update-pending="updatePending"
-      :config-downloading="configDownloading"
-      :config-download-progress="progressTickers.configDownloadProgressValue || 0"
-      :guide-history="guideHistory"
-      :settings-save-progress="progressTickers.settingsSaveProgressValue || 0"
-      @start-or-restart="handleStartOrRestart"
-      @toggle-mosdns="toggleMosdns"
-      @refresh-version="refreshVersion"
-      @apply-latest="applyLatest"
-      @open-logs-modal="openLogsModal"
-      @preview-config="previewConfig"
-      @download-config="handleDownloadConfig"
-      @open-guide-log="openGuideLog"
-      @open-preferences-modal="openPreferencesModal"
-      @open-config-editor="openConfigEditor"
-      @toggle-auto-refresh="handleAutoRefreshToggle"
-    />
-  </section>
-
-  <section v-else-if="mosdnsSection === 'lists'">
-    <MosdnsListManagement />
-  </section>
+  <RouterView />
 </template>
 
 <style scoped>
