@@ -8,7 +8,7 @@ HeroBox 是一款面向 mosdns 与多代理(sing-box、mihomo) 场景的可视�
 - **mosdns 内核管理**：自动从 `yyysuo/mosdns` Releases 检查最新版，根据当前平台下载解压到 `/usr/local/bin/mosdns`，并输出详细日志。
 - **配置校验**：`/api/mosdns/config` 检查 `/etc/herobox/mosdns/config.yaml` 是否存在，前端会在缺失时给出提示并禁用启动按钮。
 - **运行日志**：所有 mosdns 相关操作写入内存缓冲与终端，可在前端“查看日志”弹窗中滚动查看，支持手动刷新。
-- **前端交互**：Mosdns 页面分为运行状态、版本管理、配置管理三张卡片，支持启动/停止（一旦运行即自动切换为“重启”按钮）、一键更新、缺失提醒与日志弹窗；配置管理内新增目录树式“预览”弹窗，可递归浏览 mosdns 配置目录，在线查看/编辑 `.yaml/.yml/.txt` 文件并保存，同时在左侧显示文件夹层级，体验类似文件管理器。
+- **前端交互**：Mosdns 导航下现分为“总览”与“高级管理”两个路由。总览页提供运行状态、版本/配置卡片及目录树“预览”弹窗；高级管理页承载名单管理与高级开关（兼容/安全模式、请求屏蔽、类型屏蔽、IPv6 屏蔽、指定 Client、过期缓存等），开关状态实时映射到 mosdns `/plugins/switch*/post` 接口。
 - **配置偏好与下载向导**：自定义 FakeIP / 国内 DNS / Socks5 地址 / Proxy 入站地址后，下载配置会自动替换模板中的占位值，并提供进度提示与向导日志；可在线编辑配置文件且保存过程带有进度反馈。
 
 ## 快速开始
@@ -41,7 +41,10 @@ npm run dev   # 启动本地调试，默认监听 5173 端口
 | 目录                      | 说明 |
 |---------------------------|------|
 | `src/views/Dashboard.vue` | 总览页面占位，展示系统状态。 |
-| `src/views/Mosdns`        | Mosdns 相关的 Overview、ListManagement 等模块。 |
+| `src/views/Mosdns/MosdnsPage.vue` | Mosdns 布局层，负责提供全局状态和弹窗。 |
+| `src/views/Mosdns/MosdnsOverviewPage.vue` | Mosdns 总览路由，引用 `MosdnsOverview.vue`。 |
+| `src/views/Mosdns/MosdnsAdvancedPage.vue` | Mosdns 高级管理路由，包含名单管理与高级开关。 |
+| `src/views/Mosdns`        | 其余 Mosdns 相关组件（Overview、ListManagement 等）。 |
 | `src/components`          | 公共组件（弹窗、进度条、提示条等）。 |
 | `src/api.js`              | 与后端交互的 API 封装，列表接口返回纯文本也会被自动解析。 |
 
@@ -79,5 +82,6 @@ npm run dev   # 启动本地调试，默认监听 5173 端口
 - `GET /api/mosdns/kernel/latest`、`POST /api/mosdns/kernel/update`：检测与更新 mosdns 内核。
 - `GET /api/mosdns/config`：配置存在性、修改时间。
 - `GET /api/mosdns/logs`：mosdns 运行日志（仅含 `[mosdns]` 条目）。
+- `GET|POST /api/mosdns/switches/{switch}`：读取/写入 mosdns switch1-9 状态（用于高级功能开关）。
 
 欢迎根据实际需求扩展更多代理或自定义面板，只需沿用上述 API 设计和构建流程即可。
