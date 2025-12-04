@@ -31,8 +31,8 @@ func Errorf(format string, args ...any) {
 }
 
 func write(level, format string, args ...any) {
-    msg := formatMessage(format, args...)
-    log.Printf(msg)
+	msg := formatMessage(format, args...)
+	log.Print(msg)
     if defaultBuffer != nil {
         defaultBuffer.Add(level, msg)
     }

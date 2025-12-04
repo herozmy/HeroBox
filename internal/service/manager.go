@@ -295,8 +295,8 @@ func logService(spec ServiceSpec, level, format string, args ...any) {
 	msg := fmt.Sprintf("%s %s", prefix, fmt.Sprintf(format, args...))
 	switch level {
 	case "error":
-		logs.Errorf(msg)
+		logs.Errorf("%s", msg)
 	default:
-		logs.Infof(msg)
+		logs.Infof("%s", msg)
 	}
 }

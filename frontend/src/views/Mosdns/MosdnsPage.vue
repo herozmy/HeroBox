@@ -560,10 +560,17 @@ const saveConfigPreferences = async (values) => {
       proxyInboundAddress: normalized.proxyInboundAddress,
       enableSocks5: normalized.enableSocks5,
       socks5Address: normalized.socks5Address,
+      domesticFakeDnsAddress: normalized.domesticFakeDnsAddress,
+      listenAddress7777: normalized.listenAddress7777,
+      listenAddress8888: normalized.listenAddress8888,
+      aliyunDohEcsIp: normalized.aliyunDohEcsIp,
+      aliyunDohId: normalized.aliyunDohId,
+      aliyunDohKeyId: normalized.aliyunDohKeyId,
+      aliyunDohKeySecret: normalized.aliyunDohKeySecret,
     });
     stopProgressTicker('settingsSaveProgress', 100);
     Object.assign(preferencesDraft, createPreferencesDraft(normalized)); // Update reactive object
-    setBanner('success', '配置偏好已保存，下一次下载将自动应用。');
+    setBanner('success', '配置偏好已保存，config_overrides.json 已更新。');
     success = true;
   } catch (err) {
     stopProgressTicker('settingsSaveProgress', 0);
@@ -943,6 +950,70 @@ onUnmounted(() => {
         />
         <span class="muted">将替换配置中的 Proxy 入站监听地址，默认 127.0.0.1:7874。</span>
       </div>
+      <details class="preferences-collapse">
+        <summary>展开高级选项</summary>
+        <div class="config-preferences__row">
+          <label>国内 FakeDNS 输出</label>
+          <input
+            type="text"
+            v-model="preferencesDraft.domesticFakeDnsAddress"
+            placeholder="udp://127.0.0.1:7874"
+          />
+          <span class="muted">替换模板中的 udp://127.0.0.1:1053，指向本地 sing-box / mihomo FakeDNS。</span>
+        </div>
+        <div class="config-preferences__row">
+          <label>7777 监听地址</label>
+          <input
+            type="text"
+            v-model="preferencesDraft.listenAddress7777"
+            placeholder=":7777"
+          />
+          <span class="muted">将 127.0.0.1:7777 改写为此值，默认为 :7777 以取消仅本地监听。</span>
+        </div>
+        <div class="config-preferences__row">
+          <label>8888 监听地址</label>
+          <input
+            type="text"
+            v-model="preferencesDraft.listenAddress8888"
+            placeholder=":8888"
+          />
+          <span class="muted">将 127.0.0.1:8888 改写为此值。</span>
+        </div>
+        <p class="muted">阿里云私有 DoH（可选，如未启用可留空）</p>
+        <div class="config-preferences__row">
+          <label>阿里 DoH ECS IPv4</label>
+          <input
+            type="text"
+            v-model="preferencesDraft.aliyunDohEcsIp"
+            placeholder="例如 27.211.149.114"
+          />
+          <span class="muted">填 ipw.cn 查询的公网 IPv4，如不需要可留空。</span>
+        </div>
+        <div class="config-preferences__row">
+          <label>阿里 DoH ID</label>
+          <input
+            type="text"
+            v-model="preferencesDraft.aliyunDohId"
+            placeholder="6 位账号编号"
+          />
+        </div>
+        <div class="config-preferences__row">
+          <label>阿里 DoH Key ID</label>
+          <input
+            type="text"
+            v-model="preferencesDraft.aliyunDohKeyId"
+            placeholder="24 位 Key ID"
+          />
+        </div>
+        <div class="config-preferences__row">
+          <label>阿里 DoH Key Secret</label>
+          <input
+            type="password"
+            v-model="preferencesDraft.aliyunDohKeySecret"
+            placeholder="32 位秘钥"
+          />
+        </div>
+      </details>
     </div>
     <template #actions>
       <button class="btn" @click="closePreferencesModal">取消</button>
@@ -1005,5 +1076,21 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
+.config-preferences {
+  max-height: 60vh;
+  overflow-y: auto;
+  padding-right: 0.5rem;
+}
+
 /* Scoped styles specific to MosdnsPage if needed */
+details.preferences-collapse {
+  margin-top: 0.75rem;
+}
+
+details.preferences-collapse summary {
+  cursor: pointer;
+  color: #409eff;
+  font-weight: 500;
+  margin-bottom: 0.4rem;
+}
 </style>

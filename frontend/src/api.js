@@ -93,6 +93,9 @@ export const DEFAULT_DOMESTIC_DNS = '114.114.114.114';
 export const DEFAULT_SOCKS5_ADDRESS = '127.0.0.1:7891';
 export const DEFAULT_PROXY_INBOUND = '127.0.0.1:7874';
 export const DEFAULT_FORWARD_ECS = '2408:8214:213::1';
+export const DEFAULT_DOMESTIC_FAKE_DNS = 'udp://127.0.0.1:7874';
+export const DEFAULT_LISTEN_7777 = ':7777';
+export const DEFAULT_LISTEN_8888 = ':8888';
 
 export const SETTINGS_FIELDS = Object.freeze({
   fakeIpRange: DEFAULT_FAKEIP_RANGE,
@@ -100,6 +103,13 @@ export const SETTINGS_FIELDS = Object.freeze({
   socks5Address: DEFAULT_SOCKS5_ADDRESS,
   proxyInboundAddress: DEFAULT_PROXY_INBOUND,
   forwardEcsAddress: DEFAULT_FORWARD_ECS,
+  domesticFakeDnsAddress: DEFAULT_DOMESTIC_FAKE_DNS,
+  listenAddress7777: DEFAULT_LISTEN_7777,
+  listenAddress8888: DEFAULT_LISTEN_8888,
+  aliyunDohEcsIp: '',
+  aliyunDohId: '',
+  aliyunDohKeyId: '',
+  aliyunDohKeySecret: '',
 });
 
 export const createSettingsState = (overrides = {}) => ({
@@ -114,6 +124,13 @@ export const createPreferencesDraft = (settings = createSettingsState()) => ({
   socks5Address: settings.socks5Address,
   proxyInboundAddress: settings.proxyInboundAddress,
   forwardEcsAddress: settings.forwardEcsAddress,
+  domesticFakeDnsAddress: settings.domesticFakeDnsAddress,
+  listenAddress7777: settings.listenAddress7777,
+  listenAddress8888: settings.listenAddress8888,
+  aliyunDohEcsIp: settings.aliyunDohEcsIp,
+  aliyunDohId: settings.aliyunDohId,
+  aliyunDohKeyId: settings.aliyunDohKeyId,
+  aliyunDohKeySecret: settings.aliyunDohKeySecret,
 });
 
 export const normalizeTextValue = (value) => {

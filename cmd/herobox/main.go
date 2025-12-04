@@ -2,7 +2,6 @@ package main
 
 import (
 	"archive/zip"
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -10,38 +9,42 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"net"
 	"net/http"
-	"net/url"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"syscall"
 	"time"
-	"unicode"
 
 	"github.com/herozmy/herobox/internal/config"
 	"github.com/herozmy/herobox/internal/logs"
 	"github.com/herozmy/herobox/internal/mosdns"
 	"github.com/herozmy/herobox/internal/service"
-	"gopkg.in/yaml.v3"
 )
 
 var mosdnsBinaryPaths []string
 
 const (
-	defaultConfigArchive       = "https://github.com/herozmy/StoreHouse/raw/refs/heads/latest/config/mosdns/jph/mosdns.zip"
-	placeholderMosdnsDir       = "/cus/mosdns"
-	defaultFakeIPRange         = "f2b0::/18"
-	defaultDomesticDNS         = "114.114.114.114"
-	defaultFakeIPNeedle        = "fc00::/18"
-	defaultDnsNeedle           = "202.102.128.68"
+	// 配置下载地址
+	//defaultConfigArchive = "https://raw.githubusercontent.com/yyysuo/firetv/refs/heads/master/mosdns.zip"
+	defaultConfigArchive = "https://raw.githubusercontent.com/yyysuo/firetv/refs/heads/master/mosdnsconfigupdate/mosdns1204all.zip"
+	placeholderMosdnsDir = "/cus/mosdns"
+	defaultFakeIPRange   = "f2b0::/18"
+	defaultDomesticDNS   = "114.114.114.114"
+	defaultFakeIPNeedle  = "fc00::/18"
+	defaultDnsNeedle     = "202.102.128.68"
+	// defaultForwardEcsAddress 是实际使用的 ECS 转发地址（用户可自定义）。
 	defaultForwardEcsAddress   = "2408:8214:213::1"
 	defaultSocks5Address       = "127.0.0.1:7891"
 	defaultProxyInboundAddress = "127.0.0.1:7874"
+	defaultDomesticFakeDns     = "udp://127.0.0.1:7874"
+	defaultListenAddress7777   = ":7777"
+	defaultListenAddress8888   = ":8888"
+	// defaultOverridesECS 是 config_overrides.json 顶层 ecs 字段的默认值，
+	// 对应 upstream 模板中的 “ecs 2408:8888::8”，该值应保持不变。
+	defaultOverridesECS     = "2408:8888::8"
+	configOverridesFilename = "config_overrides.json"
 )
 
 func main() {
@@ -63,6 +66,9 @@ func main() {
 	mosdnsBinaryPaths = binaryCandidates("MOSDNS_BIN", "/usr/local/bin/mosdns")
 	if configStore.MosdnsVersion() == "" {
 		refreshMosdnsVersion(configStore, mosdnsBinaryPaths)
+	}
+	if err := syncConfigOverrides(configStore); err != nil {
+		log.Printf("初始化 config_overrides.json 失败: %v", err)
 	}
 
 	svcManager := service.NewManager([]service.ServiceSpec{
@@ -219,62 +225,11 @@ func main() {
 			respondErr(w, err)
 			return
 		}
-		fakeIPRange := resolveFakeIPRange(configStore)
-		domesticDNS := resolveDomesticDNS(configStore)
-		forwardEcsAddress := resolveForwardEcsAddress(configStore)
-		proxyInboundAddress := resolveProxyInboundAddress(configStore)
-		socks5Enabled := resolveSocks5Enabled(configStore)
-		socks5CustomAddr := strings.TrimSpace(resolveSocks5Address(configStore))
-		socks5EffectiveAddr := socks5CustomAddr
-		if socks5EffectiveAddr == "" {
-			socks5EffectiveAddr = defaultSocks5Address
-		}
-		fakeIPNeedle := resolveSetting(configStore, "fakeIpRangeCurrent", defaultFakeIPNeedle)
-		dnsNeedle := resolveSetting(configStore, "domesticDnsCurrent", defaultDnsNeedle)
-		forwardEcsNeedle := resolveSetting(configStore, "forwardEcsAddressCurrent", defaultForwardEcsAddress)
-		proxyAddrNeedle := resolveSetting(configStore, "proxyInboundAddressCurrent", defaultProxyInboundAddress)
-		socksAddrNeedle := resolveSetting(configStore, "socks5AddressCurrent", defaultSocks5Address)
-		fakeIPCount, err := rewriteWithFallback(targetDir, fakeIPNeedle, defaultFakeIPNeedle, fakeIPRange)
-		if err != nil {
-			respondErr(w, err)
-			return
-		}
-		dnsCount, err := rewriteWithFallback(targetDir, dnsNeedle, defaultDnsNeedle, domesticDNS)
-		if err != nil {
-			respondErr(w, err)
-			return
-		}
-		forwardEcsCount, err := rewriteWithFallback(targetDir, forwardEcsNeedle, defaultForwardEcsAddress, forwardEcsAddress)
-		if err != nil {
-			respondErr(w, err)
-			return
-		}
-		proxyAddrCount, err := rewriteWithFallback(targetDir, proxyAddrNeedle, defaultProxyInboundAddress, proxyInboundAddress)
-		if err != nil {
-			respondErr(w, err)
-			return
-		}
-		socksAddrCount, err := rewriteWithFallback(targetDir, socksAddrNeedle, defaultSocks5Address, socks5EffectiveAddr)
-		if err != nil {
-			respondErr(w, err)
-			return
-		}
-		socks5Count, err := toggleSocks5References(targetDir, socks5Enabled)
-		if err != nil {
-			respondErr(w, err)
-			return
-		}
 		guideSteps := []map[string]any{
 			buildGuideStep("步骤1：同步配置目录", placeholderCount, placeholderMosdnsDir, targetDir),
-			buildGuideStep("步骤2：更新 FakeIP IPv6 段", fakeIPCount, fakeIPNeedle, fakeIPRange),
-			buildGuideStep("步骤3：更新国内 DNS", dnsCount, dnsNeedle, domesticDNS),
-			buildGuideStep("步骤4：更新 forward_nocn_ecs 地址", forwardEcsCount, forwardEcsNeedle, forwardEcsAddress),
-			buildGuideStep("步骤5：更新 Proxy 入站地址", proxyAddrCount, proxyAddrNeedle, proxyInboundAddress),
-			buildGuideStep("步骤6：更新 SOCKS5 地址", socksAddrCount, socksAddrNeedle, socks5EffectiveAddr),
-			buildSocks5GuideStep(socks5Count, socks5Enabled),
 			{
-				"title":   "步骤8：高级向导",
-				"detail":  "功能开发中，敬请期待",
+				"title":   "步骤2：自定义设置已迁移到 config_overrides.json",
+				"detail":  "后续 FakeIP、DNS、SOCKS5 等自定义设置将仅通过 overrides 生效，不再直接修改 mosdns 配置文件。",
 				"success": false,
 			},
 		}
@@ -282,21 +237,10 @@ func main() {
 		status["placeholder"] = placeholderMosdnsDir
 		status["replacement"] = targetDir
 		status["rewritten"] = placeholderCount
-		status["fakeIpRange"] = fakeIPRange
-		status["domesticDns"] = domesticDNS
-		status["forwardEcsAddress"] = forwardEcsAddress
-		status["proxyInboundAddress"] = proxyInboundAddress
-		status["socks5Enabled"] = socks5Enabled
-		status["socks5Address"] = socks5CustomAddr
 		status["guideSteps"] = guideSteps
-		if err := configStore.UpdateSettings(map[string]string{
-			"fakeIpRangeCurrent":         fakeIPRange,
-			"domesticDnsCurrent":         domesticDNS,
-			"forwardEcsAddressCurrent":   forwardEcsAddress,
-			"proxyInboundAddressCurrent": proxyInboundAddress,
-			"socks5AddressCurrent":       socks5EffectiveAddr,
-		}); err != nil {
-			log.Printf("update settings failed: %v", err)
+		// 下载配置仅同步基础目录等信息，自定义设置依赖 config_overrides.json，由 syncConfigOverrides 负责写入。
+		if err := syncConfigOverrides(configStore); err != nil {
+			log.Printf("sync config overrides failed: %v", err)
 		}
 		respondJSON(w, status)
 	})
@@ -540,8 +484,13 @@ func main() {
 				respondErr(w, err)
 				return
 			}
-			if err := applyPreferenceSettings(configStore); err != nil {
-				log.Printf("apply settings failed: %v", err)
+			// 根据当前 SOCKS5 设置，在 mosdns 配置文件中注释或恢复 SOCKS5 相关行。
+			cfgDir := resolveConfigDir(configStore.GetConfigPath())
+			if count, err := toggleSocks5References(cfgDir, resolveSocks5Enabled(configStore)); err != nil {
+				log.Printf("toggle socks5 references failed (updated %d entries): %v", count, err)
+			}
+			if err := syncConfigOverrides(configStore); err != nil {
+				log.Printf("sync overrides failed: %v", err)
 			}
 			respondJSON(w, map[string]any{"settings": configStore.Settings()})
 		default:
@@ -824,82 +773,6 @@ func defaultConfigFile() string {
 	return "herobox.yaml"
 }
 
-func updateMosdnsState(store *config.Store, binPaths []string, snaps ...service.Snapshot) {
-	if store == nil {
-		return
-	}
-	for _, snap := range snaps {
-		if !strings.EqualFold(snap.Name, "mosdns") {
-			continue
-		}
-		_ = store.SetMosdnsStatus(string(snap.Status))
-		if snap.Status == service.StatusMissing {
-			continue
-		}
-		refreshMosdnsVersion(store, binPaths)
-	}
-}
-
-func applyMosdnsVersion(store *config.Store, snap *service.Snapshot) {
-	if store == nil || snap == nil {
-		return
-	}
-	if !strings.EqualFold(snap.Name, "mosdns") {
-		return
-	}
-	snap.Version = store.MosdnsVersion()
-}
-
-func refreshMosdnsVersion(store *config.Store, binPaths []string) {
-	if store == nil || len(binPaths) == 0 {
-		return
-	}
-	version, err := detectMosdnsVersion(binPaths)
-	if err != nil {
-		log.Printf("检测 mosdns 版本失败: %v", err)
-		return
-	}
-	if version == "" {
-		return
-	}
-	if err := store.SetMosdnsVersion(version); err != nil {
-		log.Printf("记录 mosdns 版本失败: %v", err)
-	}
-}
-
-func detectMosdnsVersion(binPaths []string) (string, error) {
-	if len(binPaths) == 0 {
-		return "", fmt.Errorf("未配置 mosdns binary 路径")
-	}
-	binary, err := firstExistingBinary(binPaths)
-	if err != nil {
-		return "", err
-	}
-	version, runErr := runMosdnsVersionCommand(binary, "version")
-	if runErr != nil {
-		version, runErr = runMosdnsVersionCommand(binary, "--version")
-	}
-	if runErr != nil {
-		return "", runErr
-	}
-	return version, nil
-}
-
-func runMosdnsVersionCommand(binary, arg string) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, binary, arg)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return "", err
-	}
-	version := normalizeMosdnsVersion(string(output))
-	if version == "" {
-		return "", fmt.Errorf("mosdns %s 输出为空", arg)
-	}
-	return version, nil
-}
-
 func normalizeMosdnsVersion(raw string) string {
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" {
@@ -1029,6 +902,10 @@ func rewriteConfigValue(baseDir, needle, replacement string) (int, error) {
 		if d.IsDir() {
 			return nil
 		}
+		// 避免直接改写 mosdns 的 overrides JSON，由 syncConfigOverrides 统一管理。
+		if strings.EqualFold(d.Name(), configOverridesFilename) {
+			return nil
+		}
 		if !isAllowedConfigFile(d.Name()) {
 			return nil
 		}
@@ -1055,731 +932,4 @@ func rewriteConfigValue(baseDir, needle, replacement string) (int, error) {
 		return nil
 	})
 	return count, err
-}
-
-func buildGuideStep(title string, count int, from, to string) map[string]any {
-	success := count > 0
-	detail := fmt.Sprintf("未在配置中检测到 %s", from)
-	if success {
-		detail = fmt.Sprintf("已在 %d 个文件中将 %s 替换为 %s", count, from, to)
-	}
-	return map[string]any{
-		"title":   title,
-		"detail":  detail,
-		"success": success,
-	}
-}
-
-func buildSocks5GuideStep(count int, enabled bool) map[string]any {
-	var detail string
-	success := true
-	if enabled {
-		if count > 0 {
-			detail = fmt.Sprintf("已启用 %d 处 SOCKS5 配置", count)
-		} else {
-			detail = "未找到可启用的 SOCKS5 配置"
-			success = false
-		}
-	} else {
-		if count > 0 {
-			detail = fmt.Sprintf("已注释 %d 处 SOCKS5 配置", count)
-		} else {
-			detail = "未检测到需要注释的 SOCKS5 配置"
-		}
-	}
-	return map[string]any{
-		"title":   "步骤4：SOCKS5 代理",
-		"detail":  detail,
-		"success": success,
-	}
-}
-
-func resolveFakeIPRange(store *config.Store) string {
-	return resolveSetting(store, "fakeIpRange", defaultFakeIPRange)
-}
-
-func resolveDomesticDNS(store *config.Store) string {
-	return resolveSetting(store, "domesticDns", defaultDomesticDNS)
-}
-
-func resolveForwardEcsAddress(store *config.Store) string {
-	return resolveSetting(store, "forwardEcsAddress", defaultForwardEcsAddress)
-}
-
-func resolveProxyInboundAddress(store *config.Store) string {
-	return resolveSetting(store, "proxyInboundAddress", defaultProxyInboundAddress)
-}
-
-func resolveSocks5Enabled(store *config.Store) bool {
-	addr := strings.TrimSpace(resolveSocks5Address(store))
-	return addr != ""
-}
-
-func resolveSocks5Address(store *config.Store) string {
-	if store == nil {
-		return defaultSocks5Address
-	}
-	settings := store.Settings()
-	if val, ok := settings["socks5Address"]; ok {
-		return strings.TrimSpace(val)
-	}
-	return defaultSocks5Address
-}
-
-func applyPreferenceSettings(store *config.Store) error {
-	if store == nil {
-		return nil
-	}
-	dir := resolveConfigDir(store.GetConfigPath())
-	if dir == "" {
-		return nil
-	}
-	fakeNeedle := resolveSetting(store, "fakeIpRangeCurrent", defaultFakeIPNeedle)
-	fakeTarget := resolveFakeIPRange(store)
-	if _, err := rewriteWithFallback(dir, fakeNeedle, defaultFakeIPNeedle, fakeTarget); err != nil {
-		return err
-	}
-	dnsNeedle := resolveSetting(store, "domesticDnsCurrent", defaultDnsNeedle)
-	dnsTarget := resolveDomesticDNS(store)
-	if _, err := rewriteWithFallback(dir, dnsNeedle, defaultDnsNeedle, dnsTarget); err != nil {
-		return err
-	}
-	forwardNeedle := resolveSetting(store, "forwardEcsAddressCurrent", defaultForwardEcsAddress)
-	forwardTarget := resolveForwardEcsAddress(store)
-	if _, err := rewriteWithFallback(dir, forwardNeedle, defaultForwardEcsAddress, forwardTarget); err != nil {
-		return err
-	}
-	proxyNeedle := resolveSetting(store, "proxyInboundAddressCurrent", defaultProxyInboundAddress)
-	proxyTarget := resolveProxyInboundAddress(store)
-	if _, err := rewriteWithFallback(dir, proxyNeedle, defaultProxyInboundAddress, proxyTarget); err != nil {
-		return err
-	}
-	socksNeedle := resolveSetting(store, "socks5AddressCurrent", defaultSocks5Address)
-	socksCustom := strings.TrimSpace(resolveSocks5Address(store))
-	socksEffective := socksCustom
-	if socksEffective == "" {
-		socksEffective = defaultSocks5Address
-	}
-	if _, err := rewriteWithFallback(dir, socksNeedle, defaultSocks5Address, socksEffective); err != nil {
-		return err
-	}
-	if _, err := toggleSocks5References(dir, resolveSocks5Enabled(store)); err != nil {
-		return err
-	}
-	_ = store.UpdateSettings(map[string]string{
-		"fakeIpRangeCurrent":         fakeTarget,
-		"domesticDnsCurrent":         dnsTarget,
-		"forwardEcsAddressCurrent":   forwardTarget,
-		"proxyInboundAddressCurrent": proxyTarget,
-		"socks5AddressCurrent":       socksEffective,
-	})
-	return nil
-}
-
-func rewriteWithFallback(dir, primaryNeedle, fallbackNeedle, target string) (int, error) {
-	count, err := rewriteConfigValue(dir, primaryNeedle, target)
-	if err != nil {
-		return 0, err
-	}
-	if count == 0 && fallbackNeedle != "" && fallbackNeedle != primaryNeedle {
-		return rewriteConfigValue(dir, fallbackNeedle, target)
-	}
-	return count, nil
-}
-
-func resolveSetting(store *config.Store, key, fallback string) string {
-	if store == nil {
-		return fallback
-	}
-	settings := store.Settings()
-	if val, ok := settings[key]; ok {
-		if trimmed := strings.TrimSpace(val); trimmed != "" {
-			return trimmed
-		}
-	}
-	return fallback
-}
-
-func resolveMosdnsPluginBaseURL(store *config.Store) string {
-	base := effectiveMosdnsPluginBase(store)
-	if base == "" {
-		host := resolveMosdnsPluginHost(store)
-		if host == "" {
-			host = "127.0.0.1"
-		}
-		port := resolveMosdnsPluginPort(store)
-		if port == "" {
-			port = "9099"
-		}
-		base = "http://" + net.JoinHostPort(host, port)
-	}
-	return strings.TrimRight(base, "/")
-}
-
-func effectiveMosdnsPluginBase(store *config.Store) string {
-	if base := normalizePluginBaseURL(getenv("MOSDNS_PLUGIN_BASE", "")); base != "" {
-		return base
-	}
-	if store != nil {
-		if base := normalizePluginBaseURL(resolveSetting(store, "mosdnsPluginBase", "")); base != "" {
-			return base
-		}
-	}
-	return ""
-}
-
-func resolveMosdnsPluginPort(store *config.Store) string {
-	if port := strings.TrimSpace(getenv("MOSDNS_PLUGIN_PORT", "")); port != "" {
-		return port
-	}
-	if base := getenv("MOSDNS_PLUGIN_BASE", ""); base != "" {
-		if _, p := pluginBaseHostPort(base); p != "" {
-			return p
-		}
-	}
-	if store != nil {
-		if base := resolveSetting(store, "mosdnsPluginBase", ""); base != "" {
-			if _, p := pluginBaseHostPort(base); p != "" {
-				return p
-			}
-		}
-		if port := strings.TrimSpace(resolveSetting(store, "mosdnsPluginPort", "")); port != "" {
-			return port
-		}
-	}
-	return "9099"
-}
-
-func resolveMosdnsPluginHost(store *config.Store) string {
-	if host := strings.TrimSpace(getenv("MOSDNS_STATUS_HOST", "")); host != "" {
-		return host
-	}
-	if base := getenv("MOSDNS_PLUGIN_BASE", ""); base != "" {
-		if h, _ := pluginBaseHostPort(base); h != "" {
-			return h
-		}
-	}
-	if store != nil {
-		if base := resolveSetting(store, "mosdnsPluginBase", ""); base != "" {
-			if h, _ := pluginBaseHostPort(base); h != "" {
-				return h
-			}
-		}
-		if host := strings.TrimSpace(resolveSetting(store, "mosdnsPluginHost", "")); host != "" {
-			return host
-		}
-	}
-	return "127.0.0.1"
-}
-
-func normalizePluginBaseURL(raw string) string {
-	trimmed := strings.TrimSpace(raw)
-	trimmed = strings.TrimRight(trimmed, "/")
-	if trimmed == "" {
-		return ""
-	}
-	if strings.Contains(trimmed, "://") {
-		return trimmed
-	}
-	return "http://" + trimmed
-}
-
-func pluginBaseHostPort(raw string) (string, string) {
-	normalized := normalizePluginBaseURL(raw)
-	if normalized == "" {
-		return "", ""
-	}
-	u, err := url.Parse(normalized)
-	if err != nil {
-		return "", ""
-	}
-	return u.Hostname(), u.Port()
-}
-
-func resolveMosdnsLogFile(store *config.Store) string {
-	if env := os.Getenv("MOSDNS_LOG_FILE"); env != "" {
-		return env
-	}
-	if store != nil {
-		if file := extractLogFilePath(store.GetConfigPath()); file != "" {
-			return file
-		}
-	}
-	return "/tmp/mosdns.log"
-}
-
-func extractLogFilePath(configPath string) string {
-	if configPath == "" {
-		return ""
-	}
-	data, err := os.ReadFile(configPath)
-	if err != nil {
-		return ""
-	}
-	var cfg struct {
-		Log struct {
-			File string `yaml:"file"`
-		} `yaml:"log"`
-	}
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
-		return ""
-	}
-	return strings.TrimSpace(cfg.Log.File)
-}
-
-func readMosdnsLogEntries(logFile string, limit int) []logs.Entry {
-	if limit <= 0 {
-		limit = 400
-	}
-	f, err := os.Open(logFile)
-	if err != nil {
-		return []logs.Entry{{
-			Timestamp: time.Now(),
-			Level:     "error",
-			Message:   fmt.Sprintf("无法读取 mosdns 日志 (%s): %v", logFile, err),
-		}}
-	}
-	defer f.Close()
-	scanner := bufio.NewScanner(f)
-	lines := make([]string, 0, limit)
-	for scanner.Scan() {
-		lines = append(lines, scanner.Text())
-		if len(lines) > limit {
-			lines = lines[1:]
-		}
-	}
-	if err := scanner.Err(); err != nil {
-		return []logs.Entry{{
-			Timestamp: time.Now(),
-			Level:     "error",
-			Message:   fmt.Sprintf("读取 mosdns 日志失败: %v", err),
-		}}
-	}
-	entries := make([]logs.Entry, 0, len(lines))
-	for _, line := range lines {
-		if entry, ok := parseMosdnsLogLine(line); ok {
-			entries = append(entries, entry)
-		}
-	}
-	return entries
-}
-
-func parseMosdnsLogLine(line string) (logs.Entry, bool) {
-	trimmed := strings.TrimSpace(line)
-	if trimmed == "" {
-		return logs.Entry{}, false
-	}
-	entry := logs.Entry{Timestamp: time.Now(), Level: "info", Message: trimmed}
-	if ts, rest, ok := extractTimestamp(trimmed); ok {
-		entry.Timestamp = ts
-		entry.Message = strings.TrimSpace(rest)
-	}
-	return entry, true
-}
-
-func extractTimestamp(line string) (time.Time, string, bool) {
-	fields := strings.Fields(line)
-	if len(fields) == 0 {
-		return time.Time{}, "", false
-	}
-	if ts, err := time.Parse("2006-01-02T15:04:05.000Z0700", fields[0]); err == nil {
-		rest := strings.TrimPrefix(line, fields[0])
-		return ts, rest, true
-	}
-	if len(fields) >= 2 {
-		candidate := fields[0] + " " + fields[1]
-		if ts, err := time.Parse("2006/01/02 15:04:05", candidate); err == nil {
-			rest := strings.TrimPrefix(line, candidate)
-			return ts, rest, true
-		}
-	}
-	return time.Time{}, "", false
-}
-
-func resolveBoolSetting(store *config.Store, key string, fallback bool) bool {
-	if store == nil {
-		return fallback
-	}
-	settings := store.Settings()
-	val, ok := settings[key]
-	if !ok {
-		return fallback
-	}
-	switch strings.ToLower(strings.TrimSpace(val)) {
-	case "1", "true", "yes", "on":
-		return true
-	case "0", "false", "no", "off":
-		return false
-	default:
-		return fallback
-	}
-}
-
-func toggleSocks5References(baseDir string, enable bool) (int, error) {
-	if baseDir == "" {
-		return 0, nil
-	}
-	count := 0
-	err := filepath.WalkDir(baseDir, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			return nil
-		}
-		if !isAllowedConfigFile(d.Name()) {
-			return nil
-		}
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		lines := strings.Split(string(data), "\n")
-		changed := false
-		for i, line := range lines {
-			updated, toggled := adjustSocks5Line(line, enable)
-			if toggled {
-				lines[i] = updated
-				count++
-				changed = true
-			}
-		}
-		if changed {
-			mode := os.FileMode(0o644)
-			if info, err := d.Info(); err == nil {
-				mode = info.Mode()
-			}
-			content := strings.Join(lines, "\n")
-			if len(lines) > 0 && strings.HasSuffix(string(data), "\n") {
-				content += "\n"
-			}
-			if err := os.WriteFile(path, []byte(content), mode); err != nil {
-				return err
-			}
-		}
-		return nil
-	})
-	return count, err
-}
-
-func adjustSocks5Line(line string, enable bool) (string, bool) {
-	lower := strings.ToLower(line)
-	if !strings.Contains(lower, "socks5") {
-		return line, false
-	}
-	idx := firstNonSpaceIndex(line)
-	if idx == -1 {
-		return line, false
-	}
-	prefix := line[:idx]
-	body := line[idx:]
-	trimmed := strings.TrimLeft(body, " \t")
-	if trimmed == "" {
-		return line, false
-	}
-	trimmedLower := strings.ToLower(trimmed)
-	if !strings.Contains(trimmedLower, "socks5") {
-		return line, false
-	}
-	if enable {
-		if strings.HasPrefix(trimmed, "#") {
-			un := strings.TrimLeft(trimmed[1:], " \t")
-			return prefix + un, true
-		}
-		return line, false
-	}
-	if strings.HasPrefix(trimmed, "#") {
-		return line, false
-	}
-	return prefix + "# " + body, true
-}
-
-func firstNonSpaceIndex(s string) int {
-	for i, r := range s {
-		if !unicode.IsSpace(r) {
-			return i
-		}
-	}
-	return -1
-}
-
-type configFile struct {
-	Name     string       `json:"name"`
-	Path     string       `json:"path"`
-	IsDir    bool         `json:"isDir"`
-	Content  string       `json:"content,omitempty"`
-	Children []configFile `json:"children,omitempty"`
-}
-
-type configNode struct {
-	Entry    configFile
-	Children []*configNode
-}
-
-func collectMosdnsFiles(path string) ([]configFile, string, error) {
-	if path == "" {
-		return nil, "", fmt.Errorf("配置路径为空")
-	}
-	baseDir := resolveConfigDir(path)
-	nodes := map[string]*configNode{}
-	root := &configNode{Entry: configFile{Name: filepath.Base(baseDir), Path: "", IsDir: true}}
-	nodes[""] = root
-
-	var addDir func(string) *configNode
-	addDir = func(rel string) *configNode {
-		if n, ok := nodes[rel]; ok {
-			return n
-		}
-		if rel == "" {
-			return root
-		}
-		parentPath := filepath.Dir(rel)
-		if parentPath == "." {
-			parentPath = ""
-		}
-		parent := addDir(parentPath)
-		entry := &configNode{Entry: configFile{Name: filepath.Base(rel), Path: rel, IsDir: true}}
-		parent.Children = append(parent.Children, entry)
-		nodes[rel] = entry
-		return entry
-	}
-
-	err := filepath.WalkDir(baseDir, func(p string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		rel, err := filepath.Rel(baseDir, p)
-		if err != nil {
-			return err
-		}
-		if rel == "." {
-			return nil
-		}
-		if d.IsDir() {
-			addDir(rel)
-			return nil
-		}
-		if !isAllowedConfigFile(d.Name()) {
-			return nil
-		}
-		parentPath := filepath.Dir(rel)
-		if parentPath == "." {
-			parentPath = ""
-		}
-		parent := addDir(parentPath)
-		data, err := os.ReadFile(p)
-		if err != nil {
-			return err
-		}
-		entry := &configNode{Entry: configFile{Name: d.Name(), Path: rel, Content: string(data)}}
-		parent.Children = append(parent.Children, entry)
-		return nil
-	})
-	if err != nil {
-		return nil, baseDir, fmt.Errorf("读取配置目录失败: %w", err)
-	}
-	return flattenConfigTree(root.Children), baseDir, nil
-}
-
-func flattenConfigTree(children []*configNode) []configFile {
-	result := make([]configFile, len(children))
-	for i, child := range children {
-		entry := child.Entry
-		if len(child.Children) > 0 {
-			entry.Children = flattenConfigTree(child.Children)
-		}
-		result[i] = entry
-	}
-	return result
-}
-
-func resolveConfigDir(path string) string {
-	if path == "" {
-		return "."
-	}
-	info, err := os.Stat(path)
-	if err == nil && info.IsDir() {
-		return path
-	}
-	dir := filepath.Dir(path)
-	if dir == "" {
-		return "."
-	}
-	return dir
-}
-
-func safeJoin(base, rel string) (string, error) {
-	if base == "" {
-		base = "."
-	}
-	if rel == "" {
-		return "", fmt.Errorf("未提供文件名")
-	}
-	full := filepath.Join(base, rel)
-	absBase, err := filepath.Abs(base)
-	if err != nil {
-		return "", err
-	}
-	absFull, err := filepath.Abs(full)
-	if err != nil {
-		return "", err
-	}
-	if !strings.HasPrefix(absFull, absBase) {
-		return "", fmt.Errorf("非法文件路径")
-	}
-	return full, nil
-}
-
-func isAllowedConfigFile(name string) bool {
-	lower := strings.ToLower(name)
-	return strings.HasSuffix(lower, ".yaml") ||
-		strings.HasSuffix(lower, ".yml") ||
-		strings.HasSuffix(lower, ".txt") ||
-		strings.HasSuffix(lower, ".conf") ||
-		strings.HasSuffix(lower, ".cfg") ||
-		strings.HasSuffix(lower, ".json")
-}
-
-func newMosdnsHooks(store *config.Store) service.ServiceHooks {
-	defaultDataDir := getenv("MOSDNS_DATA_DIR", "")
-	return service.ServiceHooks{
-		Start: func(ctx context.Context, spec service.ServiceSpec) error {
-			binary, err := firstExistingBinary(spec.BinaryPaths)
-			if err != nil {
-				return err
-			}
-			cfg := store.GetConfigPath()
-			dataDir := resolveMosdnsDataDir(defaultDataDir, cfg)
-			pid, err := runCommandDetached(binary, "start", "-c", cfg, "-d", dataDir)
-			if err != nil {
-				return err
-			}
-			return store.SetMosdnsPID(pid)
-		},
-		Stop: func(ctx context.Context, spec service.ServiceSpec) error {
-			pid := store.MosdnsPID()
-			if pid <= 0 {
-				return errors.New("未找到 mosdns 进程 PID")
-			}
-			if err := terminateProcess(pid); err != nil {
-				return err
-			}
-			return store.SetMosdnsPID(0)
-		},
-		Restart: func(ctx context.Context, spec service.ServiceSpec) error {
-			if pid := store.MosdnsPID(); pid > 0 {
-				_ = terminateProcess(pid)
-			}
-			binary, err := firstExistingBinary(spec.BinaryPaths)
-			if err != nil {
-				return err
-			}
-			cfg := store.GetConfigPath()
-			dataDir := resolveMosdnsDataDir(defaultDataDir, cfg)
-			pid, err := runCommandDetached(binary, "start", "-c", cfg, "-d", dataDir)
-			if err != nil {
-				return err
-			}
-			return store.SetMosdnsPID(pid)
-		},
-		Status: func(ctx context.Context, spec service.ServiceSpec) (service.Status, error) {
-			if pid := store.MosdnsPID(); pid > 0 {
-				if processAlive(pid) {
-					return service.StatusRunning, nil
-				}
-				_ = store.SetMosdnsPID(0)
-			}
-			ctx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
-			defer cancel()
-			host := resolveMosdnsPluginHost(store)
-			port := resolveMosdnsPluginPort(store)
-			if isMosdnsAPIAlive(ctx, host, port) {
-				return service.StatusRunning, nil
-			}
-			return service.StatusStopped, nil
-		},
-	}
-}
-
-func processAlive(pid int) bool {
-	if pid <= 0 {
-		return false
-	}
-	proc, err := os.FindProcess(pid)
-	if err != nil {
-		return false
-	}
-	if runtime.GOOS == "windows" {
-		return true
-	}
-	return proc.Signal(syscall.Signal(0)) == nil
-}
-
-func isMosdnsAPIAlive(ctx context.Context, host, port string) bool {
-	addr := net.JoinHostPort(host, port)
-	dialer := &net.Dialer{}
-	conn, err := dialer.DialContext(ctx, "tcp", addr)
-	if err != nil {
-		return false
-	}
-	conn.Close()
-	return true
-}
-
-func resolveMosdnsDataDir(envDir, configPath string) string {
-	if envDir != "" {
-		return envDir
-	}
-	if configPath == "" {
-		return "/etc/herobox/mosdns"
-	}
-	dir := filepath.Dir(configPath)
-	if dir == "." {
-		return "/etc/herobox/mosdns"
-	}
-	return dir
-}
-
-func firstExistingBinary(paths []string) (string, error) {
-	for _, candidate := range paths {
-		if candidate == "" {
-			continue
-		}
-		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
-			return candidate, nil
-		}
-	}
-	return "", fmt.Errorf("未找到可用的 mosdns 二进制路径")
-}
-
-func runCommand(ctx context.Context, binary string, args ...string) error {
-	cmd := exec.CommandContext(ctx, binary, args...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
-}
-
-func runCommandDetached(binary string, args ...string) (int, error) {
-	cmd := exec.Command(binary, args...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	if err := cmd.Start(); err != nil {
-		return 0, err
-	}
-	pid := cmd.Process.Pid
-	if err := cmd.Process.Release(); err != nil {
-		return pid, err
-	}
-	return pid, nil
-}
-
-func terminateProcess(pid int) error {
-	if pid <= 0 {
-		return errors.New("无效的 PID")
-	}
-	proc, err := os.FindProcess(pid)
-	if err != nil {
-		return err
-	}
-	return proc.Signal(syscall.SIGTERM)
 }

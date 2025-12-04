@@ -174,9 +174,19 @@ const hasGuideHistory = computed(() => Array.isArray(props.guideHistory) && prop
       <p class="muted">FakeIP IPv6 段：{{ settingsForm.fakeIpRange }}</p>
       <p class="muted">国内 DNS：{{ settingsForm.domesticDns }}</p>
       <p class="muted">SOCKS5 代理：{{ settingsForm.enableSocks5 ? '启用' : '关闭' }}</p>
-      <p class="muted">SOCKS5 地址：{{ settingsForm.socks5Address || '未设置' }}</p>
-      <p class="muted">forward_nocn_ecs：{{ settingsForm.forwardEcsAddress }}</p>
       <p class="muted">Proxy 入站地址：{{ settingsForm.proxyInboundAddress }}</p>
+      <details class="preferences-collapse">
+        <summary>展开更多字段</summary>
+        <p class="muted">SOCKS5 地址：{{ settingsForm.socks5Address || '未设置' }}</p>
+        <p class="muted">forward_nocn_ecs：{{ settingsForm.forwardEcsAddress }}</p>
+        <p class="muted">国内 FakeDNS：{{ settingsForm.domesticFakeDnsAddress || '未设置' }}</p>
+        <p class="muted">7777 监听：{{ settingsForm.listenAddress7777 || '未设置' }}</p>
+        <p class="muted">8888 监听：{{ settingsForm.listenAddress8888 || '未设置' }}</p>
+        <p class="muted">阿里 DoH ECS IPv4：{{ settingsForm.aliyunDohEcsIp || '未配置' }}</p>
+        <p class="muted">阿里 DoH ID：{{ settingsForm.aliyunDohId || '未配置' }}</p>
+        <p class="muted">阿里 DoH Key ID：{{ settingsForm.aliyunDohKeyId || '未配置' }}</p>
+      </details>
+      <p class="muted">阿里 DoH 密钥：{{ settingsForm.aliyunDohKeySecret ? '已配置' : '未配置' }}</p>
       <p class="muted" v-if="usingDefaultPreferences">当前仍为默认值，下载前建议调整。</p>
       <div class="button-row">
         <button class="btn" @click="emit('open-config-editor')">修改路径</button>
@@ -188,4 +198,14 @@ const hasGuideHistory = computed(() => Array.isArray(props.guideHistory) && prop
 
 <style scoped>
 /* Scoped styles for MosdnsOverview.vue */
+details.preferences-collapse {
+  margin-top: 0.5rem;
+}
+
+details.preferences-collapse summary {
+  cursor: pointer;
+  color: #409eff;
+  font-weight: 500;
+  margin-bottom: 0.4rem;
+}
 </style>

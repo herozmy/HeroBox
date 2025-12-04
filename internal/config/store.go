@@ -12,20 +12,22 @@ import (
 
 // Store 持久化保存可在前端调整的配置信息，例如 mosdns 配置路径与 UI 设置。
 type Store struct {
-	mu            sync.RWMutex
-	configPath    string
-	heroboxPort   string
-	mosdnsState   string
-	mosdnsPID     int
-	mosdnsVersion string
-	uiSettings    map[string]string
-	filePath      string
+	mu              sync.RWMutex
+	configPath      string
+	heroboxPort     string
+	mosdnsState     string
+	mosdnsPID       int
+	mosdnsVersion   string
+	uiSettings      map[string]string
+	configOverrides Overrides
+	filePath        string
 }
 
 type fileState struct {
-	HeroboxPort string            `yaml:"heroboxPort"`
-	UISettings  map[string]string `yaml:"uiSettings,omitempty"`
-	Mosdns      struct {
+	HeroboxPort     string            `yaml:"heroboxPort"`
+	UISettings      map[string]string `yaml:"uiSettings,omitempty"`
+	ConfigOverrides Overrides         `yaml:"configOverrides,omitempty"`
+	Mosdns          struct {
 		ConfigPath string `yaml:"configPath"`
 		Status     string `yaml:"status"`
 		PID        int    `yaml:"pid"`
@@ -123,6 +125,12 @@ func (s *Store) Settings() map[string]string {
 	return result
 }
 
+func (s *Store) ConfigOverrides() Overrides {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.configOverrides.Clone()
+}
+
 func (s *Store) UpdateSettings(values map[string]string) error {
 	if len(values) == 0 {
 		return nil
@@ -138,6 +146,13 @@ func (s *Store) UpdateSettings(values map[string]string) error {
 		}
 		s.uiSettings[key] = v
 	}
+	s.mu.Unlock()
+	return s.persist()
+}
+
+func (s *Store) SetConfigOverrides(ov Overrides) error {
+	s.mu.Lock()
+	s.configOverrides = ov.Clone()
 	s.mu.Unlock()
 	return s.persist()
 }
@@ -174,6 +189,7 @@ func (s *Store) load() error {
 	if state.HeroboxPort != "" {
 		s.heroboxPort = state.HeroboxPort
 	}
+	s.configOverrides = state.ConfigOverrides.Clone()
 	return nil
 }
 
@@ -197,6 +213,7 @@ func (s *Store) persist() error {
 	state.Mosdns.Status = s.mosdnsState
 	state.Mosdns.PID = s.mosdnsPID
 	state.Mosdns.Version = s.mosdnsVersion
+	state.ConfigOverrides = s.configOverrides.Clone()
 	s.mu.RUnlock()
 
 	data, err := yaml.Marshal(&state)
